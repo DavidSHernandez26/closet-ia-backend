@@ -8,16 +8,28 @@ import fetch from "node-fetch";
 import FormData from "form-data";
 import sharp from "sharp";
 import { createClient } from "@supabase/supabase-js";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 
 dotenv.config();
 
 const app = express();
+app.use(helmet());
 app.use(cors({
-  origin: "*",
+  origin: process.env.CORS_ORIGIN || "*",
   methods: ["GET", "POST", "PUT", "DELETE"],
   allowedHeaders: ["Content-Type", "Authorization"],
 }));
 app.use(express.json());
+
+// Fix 7 — rate limit en endpoints con IA (OpenAI + remove.bg)
+const aiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  message: { error: "Demasiadas solicitudes, espera un momento." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 const upload = multer({ dest: "uploads/" });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -27,6 +39,19 @@ const supabase = createClient(
 );
 
 const MODEL = "gpt-4o-mini";
+
+/* ─────────────────────────────────────
+   🔐 AUTH MIDDLEWARE (Fix 2)
+   Verifica el JWT de Supabase y adjunta req.userId
+───────────────────────────────────── */
+async function requireAuth(req, res, next) {
+  const token = req.headers.authorization?.replace("Bearer ", "");
+  if (!token) return res.status(401).json({ error: "No autenticado" });
+  const { data: { user }, error } = await supabase.auth.getUser(token);
+  if (error || !user) return res.status(401).json({ error: "Token inválido" });
+  req.userId = user.id;
+  next();
+}
 
 /* ─────────────────────────────────────
    🧠 PARSE JSON
@@ -239,13 +264,11 @@ app.post("/api/perfil/avatar", upload.single("avatar"), async (req, res) => {
     const { usuario_id } = req.body;
     if (!usuario_id || !req.file) return res.status(400).json({ error: "Faltan datos" });
 
-    const buffer = fs.readFileSync(req.file.path);
+    const buffer = await fs.promises.readFile(req.file.path);
     const fileName = `avatars/${usuario_id}_${Date.now()}.jpg`;
     const resized = await sharp(buffer).resize(400, 400, { fit: "cover" }).jpeg({ quality: 85 }).toBuffer();
     const { error: uploadError } = await supabase.storage
       .from("prendas").upload(fileName, resized, { contentType: "image/jpeg", upsert: true });
-
-    fs.unlinkSync(req.file.path);
     if (uploadError) throw uploadError;
 
     const avatarUrl = supabase.storage.from("prendas").getPublicUrl(fileName).data.publicUrl;
@@ -254,6 +277,8 @@ app.post("/api/perfil/avatar", upload.single("avatar"), async (req, res) => {
   } catch (err) {
     console.error("🔥 avatar:", err.message);
     res.status(500).json({ error: err.message });
+  } finally {
+    if (req.file) await fs.promises.unlink(req.file.path).catch(() => {});
   }
 });
 
@@ -383,9 +408,14 @@ app.get("/api/amistad/estado", async (req, res) => {
   }
 });
 
-app.delete("/api/amistad/:id", async (req, res) => {
+app.delete("/api/amistad/:id", requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
+    const { data: amistad } = await supabase
+      .from("friendships").select("requester_id, addressee_id").eq("id", id).single();
+    if (!amistad) return res.status(404).json({ error: "Amistad no encontrada" });
+    if (amistad.requester_id !== req.userId && amistad.addressee_id !== req.userId)
+      return res.status(403).json({ error: "Sin permiso" });
     const { error } = await supabase.from("friendships").delete().eq("id", id);
     if (error) throw error;
     res.json({ mensaje: "🗑️ Amistad eliminada" });
@@ -421,7 +451,7 @@ app.get("/api/prendas/amigo/:amigo_id", async (req, res) => {
 /* ─────────────────────────────────────
    📸 SUBIR PRENDA / OUTFIT
 ───────────────────────────────────── */
-app.post("/api/subir-prenda", upload.single("imagen"), async (req, res) => {
+app.post("/api/subir-prenda", aiLimiter, upload.single("imagen"), async (req, res) => {
   try {
     const { usuario_id, genero = "unisex", tipo = "prenda", imagen_url } = req.body;
     if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
@@ -431,8 +461,7 @@ app.post("/api/subir-prenda", upload.single("imagen"), async (req, res) => {
     let imagenOriginalBuffer = null;
 
     if (req.file) {
-      imagenOriginalBuffer = fs.readFileSync(req.file.path);
-      fs.unlinkSync(req.file.path);
+      imagenOriginalBuffer = await fs.promises.readFile(req.file.path);
       console.log("📁 Archivo recibido directo, size:", imagenOriginalBuffer.length);
     } else {
       imagenOriginalBuffer = await descargarImagen(imagenOriginalUrl);
@@ -494,7 +523,6 @@ Reglas estrictas:
         usuario_id, tipo: "prenda", genero,
         imagen_url: imagenOriginalUrl,
         descripcion, metadata_ia: parsed || {},
-        created_at: new Date().toISOString(),
       }]);
 
       return res.json({
@@ -548,7 +576,6 @@ Reglas: colores específicos, nombres correctos, tipos: calzado/parte superior/p
         imagen_url: imagenOriginalUrl,
         descripcion: descripcionOutfit,
         metadata_ia: { prendas: prendasDetectadas },
-        created_at: new Date().toISOString(),
       }]);
 
       return res.json({
@@ -560,6 +587,8 @@ Reglas: colores específicos, nombres correctos, tipos: calzado/parte superior/p
   } catch (err) {
     console.error("🔥 subir-prenda:", err.message);
     res.status(500).json({ error: err.message });
+  } finally {
+    if (req.file) await fs.promises.unlink(req.file.path).catch(() => {});
   }
 });
 
@@ -584,9 +613,12 @@ app.get("/api/prendas", async (req, res) => {
 /* ─────────────────────────────────────
    ❌ ELIMINAR PRENDA
 ───────────────────────────────────── */
-app.delete("/api/prendas/:id", async (req, res) => {
+app.delete("/api/prendas/:id", requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
+    const { data: prenda } = await supabase.from("prendas").select("usuario_id").eq("id", id).single();
+    if (!prenda) return res.status(404).json({ error: "Prenda no encontrada" });
+    if (prenda.usuario_id !== req.userId) return res.status(403).json({ error: "Sin permiso" });
     const { error } = await supabase.from("prendas").delete().eq("id", id);
     if (error) throw error;
     res.json({ mensaje: "🗑️ Eliminado" });
@@ -599,7 +631,7 @@ app.delete("/api/prendas/:id", async (req, res) => {
 /* ─────────────────────────────────────
    👗 FASHION IA
 ───────────────────────────────────── */
-app.post("/api/fashion", async (req, res) => {
+app.post("/api/fashion", aiLimiter, async (req, res) => {
   try {
     const { usuario_id, mensaje, historial = [], outfit_ids_anteriores = [] } = req.body;
     if (!usuario_id || !mensaje) return res.status(400).json({ error: "Faltan datos" });
@@ -754,6 +786,38 @@ Devuelve SIEMPRE y ÚNICAMENTE este JSON exacto sin ningún texto antes ni despu
 });
 
 /* ─────────────────────────────────────
+   🔢 HELPER — enrich posts (Fix 1: evita N+1 queries)
+   3 queries totales sin importar cuántos posts haya
+───────────────────────────────────── */
+async function enrichPosts(posts, postIds, viewerUserId) {
+  const [
+    { data: allLikes },
+    { data: allComments },
+    { data: myLikes },
+  ] = await Promise.all([
+    supabase.from("likes").select("post_id").in("post_id", postIds),
+    supabase.from("comments").select("post_id").in("post_id", postIds),
+    viewerUserId
+      ? supabase.from("likes").select("post_id").in("post_id", postIds).eq("usuario_id", viewerUserId)
+      : Promise.resolve({ data: [] }),
+  ]);
+
+  const likesMap = {};
+  const commentsMap = {};
+  const myLikesSet = new Set((myLikes || []).map((l) => l.post_id));
+
+  for (const l of allLikes || []) likesMap[l.post_id] = (likesMap[l.post_id] || 0) + 1;
+  for (const c of allComments || []) commentsMap[c.post_id] = (commentsMap[c.post_id] || 0) + 1;
+
+  return posts.map((post) => ({
+    ...post,
+    likes_count: likesMap[post.id] || 0,
+    comments_count: commentsMap[post.id] || 0,
+    liked_by_me: myLikesSet.has(post.id),
+  }));
+}
+
+/* ─────────────────────────────────────
    📸 POSTS — FEED
 ───────────────────────────────────── */
 app.post("/api/posts", upload.single("imagen"), async (req, res) => {
@@ -762,9 +826,8 @@ app.post("/api/posts", upload.single("imagen"), async (req, res) => {
     if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
     if (!req.file) return res.status(400).json({ error: "Falta imagen" });
 
-    const buffer = fs.readFileSync(req.file.path);
+    const buffer = await fs.promises.readFile(req.file.path);
     const rotated = await sharp(buffer).rotate().toBuffer();
-    fs.unlinkSync(req.file.path);
 
     const fileName = `posts/${usuario_id}_${Date.now()}.jpg`;
     const { error: uploadError } = await supabase.storage
@@ -773,15 +836,23 @@ app.post("/api/posts", upload.single("imagen"), async (req, res) => {
 
     const imagen_url = supabase.storage.from("prendas").getPublicUrl(fileName).data.publicUrl;
 
+    // Fix 6 — JSON.parse seguro
+    let prendasParsed = [];
+    if (prendas) {
+      try { prendasParsed = JSON.parse(prendas); } catch { prendasParsed = []; }
+    }
+
     const { data, error } = await supabase
       .from("posts")
-      .insert([{ usuario_id, imagen_url, descripcion: descripcion || "", prendas: prendas ? JSON.parse(prendas) : [] }])
+      .insert([{ usuario_id, imagen_url, descripcion: descripcion || "", prendas: prendasParsed }])
       .select().single();
     if (error) throw error;
     res.json(data);
   } catch (err) {
     console.error("🔥 crear post:", err.message);
     res.status(500).json({ error: err.message });
+  } finally {
+    if (req.file) await fs.promises.unlink(req.file.path).catch(() => {});
   }
 });
 
@@ -809,19 +880,8 @@ app.get("/api/feed", async (req, res) => {
       .limit(50);
     if (error) throw error;
 
-    const postsConData = await Promise.all((posts || []).map(async (post) => {
-      const [{ count: likesCount }, { count: commentsCount }, { data: misLikes }] = await Promise.all([
-        supabase.from("likes").select("*", { count: "exact", head: true }).eq("post_id", post.id),
-        supabase.from("comments").select("*", { count: "exact", head: true }).eq("post_id", post.id),
-        supabase.from("likes").select("id").eq("post_id", post.id).eq("usuario_id", usuario_id),
-      ]);
-      return {
-        ...post,
-        likes_count: likesCount || 0,
-        comments_count: commentsCount || 0,
-        liked_by_me: (misLikes || []).length > 0,
-      };
-    }));
+    const postIds = (posts || []).map((p) => p.id);
+    const postsConData = postIds.length === 0 ? [] : await enrichPosts(posts, postIds, usuario_id);
 
     res.json(postsConData);
   } catch (err) {
@@ -839,21 +899,8 @@ app.get("/api/posts/:usuario_id", async (req, res) => {
       .eq("usuario_id", usuario_id).order("created_at", { ascending: false });
     if (error) throw error;
 
-    const postsConData = await Promise.all((data || []).map(async (post) => {
-      const [{ count: likesCount }, { count: commentsCount }, { data: misLikes }] = await Promise.all([
-        supabase.from("likes").select("*", { count: "exact", head: true }).eq("post_id", post.id),
-        supabase.from("comments").select("*", { count: "exact", head: true }).eq("post_id", post.id),
-        viewer_id
-          ? supabase.from("likes").select("id").eq("post_id", post.id).eq("usuario_id", viewer_id)
-          : Promise.resolve({ data: [] }),
-      ]);
-      return {
-        ...post,
-        likes_count: likesCount || 0,
-        comments_count: commentsCount || 0,
-        liked_by_me: (misLikes || []).length > 0,
-      };
-    }));
+    const postIds = (data || []).map((p) => p.id);
+    const postsConData = postIds.length === 0 ? [] : await enrichPosts(data, postIds, viewer_id || null);
     res.json(postsConData);
   } catch (err) {
     console.error("🔥 posts usuario:", err.message);
@@ -861,9 +908,12 @@ app.get("/api/posts/:usuario_id", async (req, res) => {
   }
 });
 
-app.delete("/api/posts/:id", async (req, res) => {
+app.delete("/api/posts/:id", requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
+    const { data: post } = await supabase.from("posts").select("usuario_id").eq("id", id).single();
+    if (!post) return res.status(404).json({ error: "Post no encontrado" });
+    if (post.usuario_id !== req.userId) return res.status(403).json({ error: "Sin permiso" });
     const { error } = await supabase.from("posts").delete().eq("id", id);
     if (error) throw error;
     res.json({ mensaje: "🗑️ Post eliminado" });
