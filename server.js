@@ -26,7 +26,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
-const MODEL = "gpt-5.4-mini";
+const MODEL = "gpt-4o-mini";
 
 /* ─────────────────────────────────────
    🧠 PARSE JSON
@@ -98,19 +98,28 @@ async function removeBackground(imageBuffer) {
 }
 
 /* ─────────────────────────────────────
+   🔔 HELPER NOTIFICACIONES
+───────────────────────────────────── */
+async function crearNotificacion({ usuario_id, from_usuario_id, tipo, mensaje, post_id = null }) {
+  if (usuario_id === from_usuario_id) return;
+  try {
+    await supabase.from("notifications").insert([{
+      usuario_id, from_usuario_id, tipo, mensaje, post_id, leida: false,
+    }]);
+  } catch (err) {
+    console.error("⚠️ Error creando notificación:", err.message);
+  }
+}
+
+/* ─────────────────────────────────────
    👤 PERFIL
 ───────────────────────────────────── */
 app.get("/api/perfil/me", async (req, res) => {
   try {
     const { usuario_id } = req.query;
     if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
-
     const { data, error } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("id", usuario_id)
-      .single();
-
+      .from("profiles").select("*").eq("id", usuario_id).single();
     if (error) throw error;
     res.json(data);
   } catch (err) {
@@ -125,9 +134,7 @@ app.get("/api/perfil/:username", async (req, res) => {
     const { data, error } = await supabase
       .from("profiles")
       .select("id, username, nombre, bio, avatar_url, created_at")
-      .eq("username", username.toLowerCase())
-      .single();
-
+      .eq("username", username.toLowerCase()).single();
     if (error) return res.status(404).json({ error: "Usuario no encontrado" });
     res.json(data);
   } catch (err) {
@@ -140,14 +147,12 @@ app.get("/api/usuarios/buscar", async (req, res) => {
   try {
     const { q, usuario_id } = req.query;
     if (!q) return res.json([]);
-
     const { data, error } = await supabase
       .from("profiles")
       .select("id, username, nombre, avatar_url")
       .ilike("username", `%${q}%`)
       .neq("id", usuario_id || "")
       .limit(10);
-
     if (error) throw error;
     res.json(data || []);
   } catch (err) {
@@ -163,12 +168,9 @@ app.put("/api/perfil", async (req, res) => {
 
     if (username) {
       const { data: existing } = await supabase
-        .from("profiles")
-        .select("id")
+        .from("profiles").select("id")
         .eq("username", username.toLowerCase())
-        .neq("id", usuario_id)
-        .single();
-
+        .neq("id", usuario_id).single();
       if (existing) return res.status(400).json({ error: "Username ya en uso" });
     }
 
@@ -181,8 +183,7 @@ app.put("/api/perfil", async (req, res) => {
         ...(bio !== undefined && { bio }),
         setup_completo: true,
       }, { onConflict: "id" })
-      .select()
-      .single();
+      .select().single();
 
     if (error) throw error;
     res.json(data);
@@ -199,22 +200,15 @@ app.post("/api/perfil/avatar", upload.single("avatar"), async (req, res) => {
 
     const buffer = fs.readFileSync(req.file.path);
     const fileName = `avatars/${usuario_id}_${Date.now()}.jpg`;
-
-    const resized = await sharp(buffer)
-      .resize(400, 400, { fit: "cover" })
-      .jpeg({ quality: 85 })
-      .toBuffer();
-
+    const resized = await sharp(buffer).resize(400, 400, { fit: "cover" }).jpeg({ quality: 85 }).toBuffer();
     const { error: uploadError } = await supabase.storage
-      .from("prendas")
-      .upload(fileName, resized, { contentType: "image/jpeg", upsert: true });
+      .from("prendas").upload(fileName, resized, { contentType: "image/jpeg", upsert: true });
 
     fs.unlinkSync(req.file.path);
     if (uploadError) throw uploadError;
 
     const avatarUrl = supabase.storage.from("prendas").getPublicUrl(fileName).data.publicUrl;
     await supabase.from("profiles").update({ avatar_url: avatarUrl }).eq("id", usuario_id);
-
     res.json({ avatar_url: avatarUrl });
   } catch (err) {
     console.error("🔥 avatar:", err.message);
@@ -232,8 +226,7 @@ app.post("/api/amistad/solicitar", async (req, res) => {
     if (requester_id === addressee_id) return res.status(400).json({ error: "No puedes agregarte a ti mismo" });
 
     const { data: existing } = await supabase
-      .from("friendships")
-      .select("id, status")
+      .from("friendships").select("id, status")
       .or(`and(requester_id.eq.${requester_id},addressee_id.eq.${addressee_id}),and(requester_id.eq.${addressee_id},addressee_id.eq.${requester_id})`)
       .single();
 
@@ -245,10 +238,19 @@ app.post("/api/amistad/solicitar", async (req, res) => {
     const { data, error } = await supabase
       .from("friendships")
       .insert([{ requester_id, addressee_id, status: "pending" }])
-      .select()
-      .single();
-
+      .select().single();
     if (error) throw error;
+
+    const { data: fromProfile } = await supabase
+      .from("profiles").select("username").eq("id", requester_id).single();
+
+    await crearNotificacion({
+      usuario_id: addressee_id,
+      from_usuario_id: requester_id,
+      tipo: "solicitud",
+      mensaje: `@${fromProfile?.username || "alguien"} te envió una solicitud de amistad`,
+    });
+
     res.json({ mensaje: "✅ Solicitud enviada", data });
   } catch (err) {
     console.error("🔥 solicitar amistad:", err.message);
@@ -266,10 +268,20 @@ app.put("/api/amistad/responder", async (req, res) => {
       .update({ status })
       .eq("id", friendship_id)
       .eq("addressee_id", usuario_id)
-      .select()
-      .single();
-
+      .select().single();
     if (error) throw error;
+
+    if (status === "accepted") {
+      const { data: fromProfile } = await supabase
+        .from("profiles").select("username").eq("id", usuario_id).single();
+      await crearNotificacion({
+        usuario_id: data.requester_id,
+        from_usuario_id: usuario_id,
+        tipo: "aceptado",
+        mensaje: `@${fromProfile?.username || "alguien"} aceptó tu solicitud de amistad 🎉`,
+      });
+    }
+
     res.json({ mensaje: `✅ Solicitud ${status}`, data });
   } catch (err) {
     console.error("🔥 responder amistad:", err.message);
@@ -281,13 +293,10 @@ app.get("/api/amistad/solicitudes", async (req, res) => {
   try {
     const { usuario_id } = req.query;
     if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
-
     const { data, error } = await supabase
       .from("friendships")
       .select(`id, status, created_at, requester:requester_id(id, username, nombre, avatar_url)`)
-      .eq("addressee_id", usuario_id)
-      .eq("status", "pending");
-
+      .eq("addressee_id", usuario_id).eq("status", "pending");
     if (error) throw error;
     res.json(data || []);
   } catch (err) {
@@ -300,20 +309,17 @@ app.get("/api/amistad/amigos", async (req, res) => {
   try {
     const { usuario_id } = req.query;
     if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
-
     const { data, error } = await supabase
       .from("friendships")
       .select(`id, requester:requester_id(id, username, nombre, avatar_url), addressee:addressee_id(id, username, nombre, avatar_url)`)
       .or(`requester_id.eq.${usuario_id},addressee_id.eq.${usuario_id}`)
       .eq("status", "accepted");
-
     if (error) throw error;
 
     const amigos = (data || []).map((f) => {
       const amigo = f.requester.id === usuario_id ? f.addressee : f.requester;
       return { friendship_id: f.id, ...amigo };
     });
-
     res.json(amigos);
   } catch (err) {
     console.error("🔥 amigos:", err.message);
@@ -325,13 +331,11 @@ app.get("/api/amistad/estado", async (req, res) => {
   try {
     const { usuario_id, otro_id } = req.query;
     if (!usuario_id || !otro_id) return res.status(400).json({ error: "Faltan datos" });
-
     const { data } = await supabase
       .from("friendships")
       .select("id, status, requester_id, addressee_id")
       .or(`and(requester_id.eq.${usuario_id},addressee_id.eq.${otro_id}),and(requester_id.eq.${otro_id},addressee_id.eq.${usuario_id})`)
       .single();
-
     res.json(data || { status: "none" });
   } catch {
     res.json({ status: "none" });
@@ -357,22 +361,13 @@ app.get("/api/prendas/amigo/:amigo_id", async (req, res) => {
     if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
 
     const { data: amistad } = await supabase
-      .from("friendships")
-      .select("id")
+      .from("friendships").select("id")
       .or(`and(requester_id.eq.${usuario_id},addressee_id.eq.${amigo_id}),and(requester_id.eq.${amigo_id},addressee_id.eq.${usuario_id})`)
-      .eq("status", "accepted")
-      .single();
-
+      .eq("status", "accepted").single();
     if (!amistad) return res.status(403).json({ error: "No son amigos" });
 
-    let query = supabase
-      .from("prendas")
-      .select("*")
-      .eq("usuario_id", amigo_id)
-      .order("created_at", { ascending: false });
-
+    let query = supabase.from("prendas").select("*").eq("usuario_id", amigo_id).order("created_at", { ascending: false });
     if (tipo && tipo !== "todos") query = query.eq("tipo", tipo);
-
     const { data, error } = await query;
     if (error) throw error;
     res.json(data || []);
@@ -388,7 +383,6 @@ app.get("/api/prendas/amigo/:amigo_id", async (req, res) => {
 app.post("/api/subir-prenda", upload.single("imagen"), async (req, res) => {
   try {
     const { usuario_id, genero = "unisex", tipo = "prenda", imagen_url } = req.body;
-
     if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
     if (!req.file && !imagen_url) return res.status(400).json({ error: "No se envió imagen" });
 
@@ -406,29 +400,19 @@ app.post("/api/subir-prenda", upload.single("imagen"), async (req, res) => {
 
     imagenOriginalBuffer = await sharp(imagenOriginalBuffer).rotate().toBuffer();
 
-    /* ═══════════════════════════════
-       🟢 FLUJO A: PRENDA INDIVIDUAL
-    ═══════════════════════════════ */
     if (tipo === "prenda") {
       console.log("👕 Modo: prenda individual — quitando fondo...");
-
       const sinFondo = await removeBackground(imagenOriginalBuffer);
       const bufferFinal = sinFondo || imagenOriginalBuffer;
       const tieneFondo = !sinFondo;
-
       if (tieneFondo) console.log("⚠️ remove.bg falló, usando imagen original");
 
       const cleanName = `${usuario_id}_${Date.now()}_prenda.png`;
       const { error: uploadError } = await supabase.storage
-        .from("prendas")
-        .upload(cleanName, bufferFinal, { contentType: "image/png" });
-
+        .from("prendas").upload(cleanName, bufferFinal, { contentType: "image/png" });
       if (uploadError) throw uploadError;
 
-      imagenOriginalUrl = supabase.storage
-        .from("prendas")
-        .getPublicUrl(cleanName).data.publicUrl;
-
+      imagenOriginalUrl = supabase.storage.from("prendas").getPublicUrl(cleanName).data.publicUrl;
       console.log("📤 Imagen subida:", imagenOriginalUrl);
 
       const ai = await openai.chat.completions.create({
@@ -451,14 +435,11 @@ Reglas estrictas:
 - Para el nombre: usa el término correcto (tenis, botines, mocasines, chaqueta, sudadera, hoodie, polo, blusa, etc).
 - Para el tipo: usa únicamente: calzado, parte superior, parte inferior, accesorio, abrigo.`,
             },
-            {
-              type: "image_url",
-              image_url: { url: imagenOriginalUrl, detail: "high" },
-            },
+            { type: "image_url", image_url: { url: imagenOriginalUrl, detail: "high" } },
           ],
         }],
         temperature: 0,
-        max_completion_tokens: 200,
+        max_tokens: 200,
       });
 
       const parsed = safeParseJSON(ai.choices[0].message.content);
@@ -466,16 +447,12 @@ Reglas estrictas:
       const color = parsed?.color || "?";
       const tipoPrenda = parsed?.tipo || "?";
       const descripcion = `${nombre} (${color}) - ${tipoPrenda}`;
-
       console.log("👕 Detectado:", descripcion);
 
       await supabase.from("prendas").insert([{
-        usuario_id,
-        tipo: "prenda",
-        genero,
+        usuario_id, tipo: "prenda", genero,
         imagen_url: imagenOriginalUrl,
-        descripcion,
-        metadata_ia: parsed || {},
+        descripcion, metadata_ia: parsed || {},
         created_at: new Date().toISOString(),
       }]);
 
@@ -486,22 +463,14 @@ Reglas estrictas:
       });
     }
 
-    /* ═══════════════════════════════
-       🟣 FLUJO B: OUTFIT COMPLETO
-    ═══════════════════════════════ */
     if (tipo === "outfit") {
       console.log("🧥 Modo: outfit completo");
-
       const outfitName = `${usuario_id}_${Date.now()}_outfit.jpg`;
       const { error: uploadError } = await supabase.storage
-        .from("prendas")
-        .upload(outfitName, imagenOriginalBuffer, { contentType: "image/jpeg" });
-
+        .from("prendas").upload(outfitName, imagenOriginalBuffer, { contentType: "image/jpeg" });
       if (uploadError) throw uploadError;
 
-      imagenOriginalUrl = supabase.storage
-        .from("prendas")
-        .getPublicUrl(outfitName).data.publicUrl;
+      imagenOriginalUrl = supabase.storage.from("prendas").getPublicUrl(outfitName).data.publicUrl;
 
       const ai = await openai.chat.completions.create({
         model: MODEL,
@@ -521,26 +490,20 @@ Analiza este outfit y devuelve SOLO este JSON:
 }
 Reglas: colores específicos, nombres correctos, tipos: calzado/parte superior/parte inferior/accesorio/abrigo. Incluye TODAS las prendas visibles.`,
             },
-            {
-              type: "image_url",
-              image_url: { url: imagenOriginalUrl, detail: "high" },
-            },
+            { type: "image_url", image_url: { url: imagenOriginalUrl, detail: "high" } },
           ],
         }],
         temperature: 0,
-        max_completion_tokens: 800,
+        max_tokens: 800,
       });
 
       const parsed = safeParseJSON(ai.choices[0].message.content);
       const prendasDetectadas = parsed?.prendas || [];
       const descripcionOutfit = parsed?.descripcion_outfit || "Outfit completo";
-
       console.log("🧥 Prendas detectadas:", prendasDetectadas.length);
 
       await supabase.from("prendas").insert([{
-        usuario_id,
-        tipo: "outfit",
-        genero,
+        usuario_id, tipo: "outfit", genero,
         imagen_url: imagenOriginalUrl,
         descripcion: descripcionOutfit,
         metadata_ia: { prendas: prendasDetectadas },
@@ -553,7 +516,6 @@ Reglas: colores específicos, nombres correctos, tipos: calzado/parte superior/p
     }
 
     res.status(400).json({ error: "Tipo inválido, usa 'prenda' o 'outfit'" });
-
   } catch (err) {
     console.error("🔥 subir-prenda:", err.message);
     res.status(500).json({ error: err.message });
@@ -567,15 +529,8 @@ app.get("/api/prendas", async (req, res) => {
   try {
     const { usuario_id, tipo } = req.query;
     if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
-
-    let query = supabase
-      .from("prendas")
-      .select("*")
-      .eq("usuario_id", usuario_id)
-      .order("created_at", { ascending: false });
-
+    let query = supabase.from("prendas").select("*").eq("usuario_id", usuario_id).order("created_at", { ascending: false });
     if (tipo && tipo !== "todos") query = query.eq("tipo", tipo);
-
     const { data, error } = await query;
     if (error) throw error;
     res.json(data || []);
@@ -609,10 +564,7 @@ app.post("/api/fashion", async (req, res) => {
     if (!usuario_id || !mensaje) return res.status(400).json({ error: "Faltan datos" });
 
     const { data: prendas, error } = await supabase
-      .from("prendas")
-      .select("id, descripcion, imagen_url, tipo, metadata_ia")
-      .eq("usuario_id", usuario_id);
-
+      .from("prendas").select("id, descripcion, imagen_url, tipo, metadata_ia").eq("usuario_id", usuario_id);
     if (error) throw error;
 
     if (!prendas || prendas.length === 0) {
@@ -633,16 +585,12 @@ app.post("/api/fashion", async (req, res) => {
     const contextoOutfits = outfitsGuardados.length > 0
       ? "\n\nOUTFITS GUARDADOS (solo referencia de estilo):\n" +
         outfitsGuardados.map((p) => {
-          const lista = p.metadata_ia?.prendas
-            ?.map((x) => `${x.nombre} (${x.color})`)
-            .join(", ") || "";
+          const lista = p.metadata_ia?.prendas?.map((x) => `${x.nombre} (${x.color})`).join(", ") || "";
           return `[ID:${p.id}] ${p.descripcion}${lista ? ` — incluye: ${lista}` : ""}`;
         }).join("\n")
       : "";
 
-    const prendasActuales = prendasSueltas.filter((p) =>
-      outfit_ids_anteriores.includes(p.id)
-    );
+    const prendasActuales = prendasSueltas.filter((p) => outfit_ids_anteriores.includes(p.id));
     const contextoActual = prendasActuales.length > 0
       ? "\n\nOUTFIT ACTUAL EN PANTALLA:\n" +
         prendasActuales.map((p) => `[ID:${p.id}] ${p.descripcion}`).join("\n")
@@ -650,9 +598,7 @@ app.post("/api/fashion", async (req, res) => {
 
     const historialTexto = historial.length > 0
       ? "\n\nHISTORIAL DE CONVERSACIÓN:\n" +
-        historial
-          .map((h) => `${h.role === "user" ? "Usuario" : "Asistente"}: ${h.text}`)
-          .join("\n")
+        historial.map((h) => `${h.role === "user" ? "Usuario" : "Asistente"}: ${h.text}`).join("\n")
       : "";
 
     const ai = await openai.chat.completions.create({
@@ -704,7 +650,7 @@ REGLAS DE COMBINACIÓN:
    - Explica brevemente por qué los colores elegidos funcionan juntos
    - Menciona para qué ocasión es ideal el look
    - Señala cómo se complementan las prendas entre sí
-   - Si es relevante, da un tip de estilo (cómo llevar una prenda, qué actitud transmite el look)
+   - Si es relevante, da un tip de estilo
    - Tono: cálido, cercano, como un amigo con buen gusto que te asesora
    - Responde siempre en español
 
@@ -715,7 +661,6 @@ REGLAS DE COMBINACIÓN:
 8. REGLA DE ORO:
    - outfit_ids SOLO puede contener IDs de PRENDAS SUELTAS
    - NUNCA incluyas IDs de outfits guardados en outfit_ids
-   - Los outfits guardados son solo referencia de estilo, no se muestran en el maniquí
 
 Devuelve SIEMPRE y ÚNICAMENTE este JSON exacto sin ningún texto antes ni después:
 {"respuesta":"explicación detallada y cercana del outfit","outfit_ids":[id1,id2,id3],"cambiar_panel":true}`,
@@ -725,7 +670,7 @@ Devuelve SIEMPRE y ÚNICAMENTE este JSON exacto sin ningún texto antes ni despu
           content: `${contextoPrendas}${contextoOutfits}${contextoActual}${historialTexto}\n\nMensaje del usuario: ${mensaje}`,
         },
       ],
-      max_completion_tokens: 800,
+      max_tokens: 800,
       temperature: 0.8,
     });
 
@@ -735,24 +680,17 @@ Devuelve SIEMPRE y ÚNICAMENTE este JSON exacto sin ningún texto antes ni despu
       const fallback = [...prendasSueltas].sort(() => Math.random() - 0.5).slice(0, 3);
       return res.json({
         respuesta: "Te armé una combinación con lo que tienes disponible. ¡Pruébala y dime qué piensas!",
-        outfit: fallback,
-        outfit_guardado: null,
-        cambiar_panel: true,
+        outfit: fallback, outfit_guardado: null, cambiar_panel: true,
       });
     }
 
     const cambiarPanel = parsed.cambiar_panel ?? true;
-
-    const outfitGuardadoRecomendado = outfitsGuardados.find((p) =>
-      parsed.outfit_ids?.includes(p.id)
-    );
+    const outfitGuardadoRecomendado = outfitsGuardados.find((p) => parsed.outfit_ids?.includes(p.id));
 
     if (outfitGuardadoRecomendado) {
       return res.json({
         respuesta: parsed.respuesta,
-        outfit: [],
-        outfit_guardado: outfitGuardadoRecomendado,
-        cambiar_panel: cambiarPanel,
+        outfit: [], outfit_guardado: outfitGuardadoRecomendado, cambiar_panel: cambiarPanel,
       });
     }
 
@@ -765,14 +703,11 @@ Devuelve SIEMPRE y ÚNICAMENTE este JSON exacto sin ningún texto antes ni despu
       outfit_guardado: null,
       cambiar_panel: cambiarPanel,
     });
-
   } catch (err) {
     console.error("🔥 fashion:", err.message);
     res.status(500).json({
       respuesta: "Ocurrió un error al generar el outfit. Inténtalo de nuevo.",
-      outfit: [],
-      outfit_guardado: null,
-      cambiar_panel: false,
+      outfit: [], outfit_guardado: null, cambiar_panel: false,
     });
   }
 });
@@ -780,8 +715,6 @@ Devuelve SIEMPRE y ÚNICAMENTE este JSON exacto sin ningún texto antes ni despu
 /* ─────────────────────────────────────
    📸 POSTS — FEED
 ───────────────────────────────────── */
-
-/* Crear post */
 app.post("/api/posts", upload.single("imagen"), async (req, res) => {
   try {
     const { usuario_id, descripcion, prendas } = req.body;
@@ -794,24 +727,15 @@ app.post("/api/posts", upload.single("imagen"), async (req, res) => {
 
     const fileName = `posts/${usuario_id}_${Date.now()}.jpg`;
     const { error: uploadError } = await supabase.storage
-      .from("prendas")
-      .upload(fileName, rotated, { contentType: "image/jpeg" });
-
+      .from("prendas").upload(fileName, rotated, { contentType: "image/jpeg" });
     if (uploadError) throw uploadError;
 
     const imagen_url = supabase.storage.from("prendas").getPublicUrl(fileName).data.publicUrl;
 
     const { data, error } = await supabase
       .from("posts")
-      .insert([{
-        usuario_id,
-        imagen_url,
-        descripcion: descripcion || "",
-        prendas: prendas ? JSON.parse(prendas) : [],
-      }])
-      .select()
-      .single();
-
+      .insert([{ usuario_id, imagen_url, descripcion: descripcion || "", prendas: prendas ? JSON.parse(prendas) : [] }])
+      .select().single();
     if (error) throw error;
     res.json(data);
   } catch (err) {
@@ -820,13 +744,11 @@ app.post("/api/posts", upload.single("imagen"), async (req, res) => {
   }
 });
 
-/* Obtener feed (posts de amigos + propios) */
 app.get("/api/feed", async (req, res) => {
   try {
     const { usuario_id } = req.query;
     if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
 
-    /* Obtener IDs de amigos */
     const { data: amistades } = await supabase
       .from("friendships")
       .select("requester_id, addressee_id")
@@ -836,30 +758,22 @@ app.get("/api/feed", async (req, res) => {
     const amigoIds = (amistades || []).map((f) =>
       f.requester_id === usuario_id ? f.addressee_id : f.requester_id
     );
-
     const todosIds = [usuario_id, ...amigoIds];
 
-    /* Obtener posts */
     const { data: posts, error } = await supabase
       .from("posts")
-      .select(`
-        id, imagen_url, descripcion, prendas, created_at, usuario_id,
-        profile:usuario_id(id, username, nombre, avatar_url)
-      `)
+      .select(`id, imagen_url, descripcion, prendas, created_at, usuario_id, profile:usuario_id(id, username, nombre, avatar_url)`)
       .in("usuario_id", todosIds)
       .order("created_at", { ascending: false })
       .limit(50);
-
     if (error) throw error;
 
-    /* Agregar likes y comentarios count */
     const postsConData = await Promise.all((posts || []).map(async (post) => {
       const [{ count: likesCount }, { count: commentsCount }, { data: misLikes }] = await Promise.all([
         supabase.from("likes").select("*", { count: "exact", head: true }).eq("post_id", post.id),
         supabase.from("comments").select("*", { count: "exact", head: true }).eq("post_id", post.id),
         supabase.from("likes").select("id").eq("post_id", post.id).eq("usuario_id", usuario_id),
       ]);
-
       return {
         ...post,
         likes_count: likesCount || 0,
@@ -875,18 +789,13 @@ app.get("/api/feed", async (req, res) => {
   }
 });
 
-/* Posts de un usuario */
 app.get("/api/posts/:usuario_id", async (req, res) => {
   try {
     const { usuario_id } = req.params;
     const { viewer_id } = req.query;
-
     const { data, error } = await supabase
-      .from("posts")
-      .select(`id, imagen_url, descripcion, prendas, created_at`)
-      .eq("usuario_id", usuario_id)
-      .order("created_at", { ascending: false });
-
+      .from("posts").select("id, imagen_url, descripcion, prendas, created_at")
+      .eq("usuario_id", usuario_id).order("created_at", { ascending: false });
     if (error) throw error;
 
     const postsConData = await Promise.all((data || []).map(async (post) => {
@@ -897,7 +806,6 @@ app.get("/api/posts/:usuario_id", async (req, res) => {
           ? supabase.from("likes").select("id").eq("post_id", post.id).eq("usuario_id", viewer_id)
           : Promise.resolve({ data: [] }),
       ]);
-
       return {
         ...post,
         likes_count: likesCount || 0,
@@ -905,7 +813,6 @@ app.get("/api/posts/:usuario_id", async (req, res) => {
         liked_by_me: (misLikes || []).length > 0,
       };
     }));
-
     res.json(postsConData);
   } catch (err) {
     console.error("🔥 posts usuario:", err.message);
@@ -913,7 +820,6 @@ app.get("/api/posts/:usuario_id", async (req, res) => {
   }
 });
 
-/* Eliminar post */
 app.delete("/api/posts/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -927,7 +833,7 @@ app.delete("/api/posts/:id", async (req, res) => {
 });
 
 /* ─────────────────────────────────────
-   ❤️ LIKES
+   ❤️ LIKES (con notificación)
 ───────────────────────────────────── */
 app.post("/api/likes", async (req, res) => {
   try {
@@ -935,11 +841,7 @@ app.post("/api/likes", async (req, res) => {
     if (!post_id || !usuario_id) return res.status(400).json({ error: "Faltan datos" });
 
     const { data: existing } = await supabase
-      .from("likes")
-      .select("id")
-      .eq("post_id", post_id)
-      .eq("usuario_id", usuario_id)
-      .single();
+      .from("likes").select("id").eq("post_id", post_id).eq("usuario_id", usuario_id).single();
 
     if (existing) {
       await supabase.from("likes").delete().eq("id", existing.id);
@@ -947,6 +849,20 @@ app.post("/api/likes", async (req, res) => {
     }
 
     await supabase.from("likes").insert([{ post_id, usuario_id }]);
+
+    const { data: post } = await supabase.from("posts").select("usuario_id").eq("id", post_id).single();
+    const { data: fromProfile } = await supabase.from("profiles").select("username").eq("id", usuario_id).single();
+
+    if (post?.usuario_id) {
+      await crearNotificacion({
+        usuario_id: post.usuario_id,
+        from_usuario_id: usuario_id,
+        tipo: "like",
+        mensaje: `@${fromProfile?.username || "alguien"} le dio ❤️ a tu outfit`,
+        post_id,
+      });
+    }
+
     res.json({ liked: true });
   } catch (err) {
     console.error("🔥 like:", err.message);
@@ -955,20 +871,15 @@ app.post("/api/likes", async (req, res) => {
 });
 
 /* ─────────────────────────────────────
-   💬 COMENTARIOS
+   💬 COMENTARIOS (con notificación)
 ───────────────────────────────────── */
 app.get("/api/comments/:post_id", async (req, res) => {
   try {
     const { post_id } = req.params;
     const { data, error } = await supabase
       .from("comments")
-      .select(`
-        id, texto, created_at, usuario_id,
-        profile:usuario_id(id, username, nombre, avatar_url)
-      `)
-      .eq("post_id", post_id)
-      .order("created_at", { ascending: true });
-
+      .select(`id, texto, created_at, usuario_id, profile:usuario_id(id, username, nombre, avatar_url)`)
+      .eq("post_id", post_id).order("created_at", { ascending: true });
     if (error) throw error;
     res.json(data || []);
   } catch (err) {
@@ -985,13 +896,21 @@ app.post("/api/comments", async (req, res) => {
     const { data, error } = await supabase
       .from("comments")
       .insert([{ post_id, usuario_id, texto: texto.trim() }])
-      .select(`
-        id, texto, created_at, usuario_id,
-        profile:usuario_id(id, username, nombre, avatar_url)
-      `)
+      .select(`id, texto, created_at, usuario_id, profile:usuario_id(id, username, nombre, avatar_url)`)
       .single();
-
     if (error) throw error;
+
+    const { data: post } = await supabase.from("posts").select("usuario_id").eq("id", post_id).single();
+    if (post?.usuario_id) {
+      await crearNotificacion({
+        usuario_id: post.usuario_id,
+        from_usuario_id: usuario_id,
+        tipo: "comentario",
+        mensaje: `@${data.profile?.username || "alguien"} comentó: "${texto.trim().slice(0, 40)}${texto.length > 40 ? "..." : ""}"`,
+        post_id,
+      });
+    }
+
     res.json(data);
   } catch (err) {
     console.error("🔥 comentar:", err.message);
@@ -1018,16 +937,11 @@ app.get("/api/wishlist", async (req, res) => {
   try {
     const { usuario_id } = req.query;
     if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
-
     const { data, error } = await supabase
       .from("wishlist")
-      .select(`
-        id, imagen_url, descripcion, created_at, post_id,
-        post:post_id(id, imagen_url, descripcion, profile:usuario_id(username, nombre, avatar_url))
-      `)
-      .eq("usuario_id", usuario_id)
-      .order("created_at", { ascending: false });
-
+      .select(`id, imagen_url, descripcion, created_at, post_id,
+        post:post_id(id, imagen_url, descripcion, profile:usuario_id(username, nombre, avatar_url))`)
+      .eq("usuario_id", usuario_id).order("created_at", { ascending: false });
     if (error) throw error;
     res.json(data || []);
   } catch (err) {
@@ -1042,11 +956,7 @@ app.post("/api/wishlist", async (req, res) => {
     if (!usuario_id || !post_id) return res.status(400).json({ error: "Faltan datos" });
 
     const { data: existing } = await supabase
-      .from("wishlist")
-      .select("id")
-      .eq("usuario_id", usuario_id)
-      .eq("post_id", post_id)
-      .single();
+      .from("wishlist").select("id").eq("usuario_id", usuario_id).eq("post_id", post_id).single();
 
     if (existing) {
       await supabase.from("wishlist").delete().eq("id", existing.id);
@@ -1069,6 +979,99 @@ app.delete("/api/wishlist/:id", async (req, res) => {
     res.json({ mensaje: "🗑️ Eliminado de wishlist" });
   } catch (err) {
     console.error("🔥 delete wishlist:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+/* ─────────────────────────────────────
+   🔔 NOTIFICACIONES
+───────────────────────────────────── */
+app.get("/api/notificaciones/count", async (req, res) => {
+  try {
+    const { usuario_id } = req.query;
+    if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
+
+    const { count, error } = await supabase
+      .from("notifications")
+      .select("*", { count: "exact", head: true })
+      .eq("usuario_id", usuario_id)
+      .eq("leida", false);
+
+    if (error) throw error;
+    res.json({ count: count || 0 });
+  } catch (err) {
+    console.error("🔥 notif count:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/notificaciones", async (req, res) => {
+  try {
+    const { usuario_id } = req.query;
+    if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
+
+    const { data, error } = await supabase
+      .from("notifications")
+      .select(`
+        id, tipo, mensaje, leida, created_at, post_id,
+        from_profile:from_user_id(id, username, nombre, avatar_url)
+      `)
+      .eq("usuario_id", usuario_id)
+      .order("created_at", { ascending: false })
+      .limit(30);
+
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err) {
+    console.error("🔥 notificaciones:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/notificaciones/leer", async (req, res) => {
+  try {
+    const { usuario_id } = req.body;
+    if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
+
+    const { error } = await supabase
+      .from("notifications")
+      .update({ leida: true })
+      .eq("usuario_id", usuario_id)
+      .eq("leida", false);
+
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("🔥 marcar leidas:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/notificaciones/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { error } = await supabase.from("notifications").delete().eq("id", id);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("🔥 delete notif:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/notificaciones", async (req, res) => {
+  try {
+    const { usuario_id } = req.query;
+    if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
+
+    const { error } = await supabase
+      .from("notifications")
+      .delete()
+      .eq("usuario_id", usuario_id);
+
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("🔥 delete todas notif:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
