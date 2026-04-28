@@ -161,6 +161,47 @@ app.get("/api/usuarios/buscar", async (req, res) => {
   }
 });
 
+/* ─────────────────────────────────────
+   ✨ SUGERIDOS — usuarios que el usuario
+   actual no conoce todavía (ni amigos
+   ni solicitudes pendientes).
+   Usado por el sidebar del Feed.
+───────────────────────────────────── */
+app.get("/api/usuarios/sugeridos", async (req, res) => {
+  try {
+    const { usuario_id } = req.query;
+    if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
+
+    // Obtener todas las conexiones existentes (aceptadas + pendientes)
+    const { data: amistades } = await supabase
+      .from("friendships")
+      .select("requester_id, addressee_id")
+      .or(`requester_id.eq.${usuario_id},addressee_id.eq.${usuario_id}`);
+
+    // Construir set de IDs a excluir
+    const excluir = new Set([usuario_id]);
+    (amistades || []).forEach((f) => {
+      excluir.add(f.requester_id);
+      excluir.add(f.addressee_id);
+    });
+
+    // Usuarios fuera del set, ordenados por fecha de creación desc
+    // para mostrar los más recientes primero
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("id, username, nombre, avatar_url, created_at")
+      .not("id", "in", `(${[...excluir].join(",")})`)
+      .order("created_at", { ascending: false })
+      .limit(6);
+
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err) {
+    console.error("🔥 sugeridos:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.put("/api/perfil", async (req, res) => {
   try {
     const { usuario_id, username, nombre, bio } = req.body;
@@ -982,6 +1023,7 @@ app.delete("/api/wishlist/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 /* ─────────────────────────────────────
    🔔 NOTIFICACIONES
 ───────────────────────────────────── */
@@ -1075,6 +1117,7 @@ app.delete("/api/notificaciones", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 /* ─────────────────────────────────────
    🚀 START
 ───────────────────────────────────── */
