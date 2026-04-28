@@ -14,7 +14,10 @@ import rateLimit from "express-rate-limit";
 dotenv.config();
 
 const app = express();
-app.use(helmet());
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  contentSecurityPolicy: false,
+}));
 app.use(cors({
   origin: process.env.CORS_ORIGIN || "*",
   methods: ["GET", "POST", "PUT", "DELETE"],
