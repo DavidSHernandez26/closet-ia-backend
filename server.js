@@ -10,6 +10,7 @@ import sharp from "sharp";
 import { createClient } from "@supabase/supabase-js";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
+import imglyRemoveBg from "@imgly/background-removal-node";
 
 dotenv.config();
 
@@ -25,7 +26,7 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// Fix 7 — rate limit en endpoints con IA (OpenAI + remove.bg)
+// Fix 7 — rate limit en endpoints con IA (OpenAI + rembg)
 const aiLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 10,
@@ -89,38 +90,26 @@ async function descargarImagen(url) {
 }
 
 /* ─────────────────────────────────────
-   🧼 REMOVE BACKGROUND
+   🧼 REMOVE BACKGROUND (local, sin API externa)
+   Usa @imgly/background-removal-node — corre en el mismo proceso Node.js.
+   model "medium" para outfits, "large" para prenda individual.
 ───────────────────────────────────── */
-async function removeBackground(imageBuffer) {
+async function removeBackground(imageBuffer, quality = "large") {
   try {
-    console.log("🧼 Enviando a remove.bg, tamaño buffer:", imageBuffer.length);
-    const formData = new FormData();
-    formData.append("image_file", imageBuffer, {
-      filename: "prenda.png",
-      contentType: "image/png",
-    });
-    formData.append("size", "auto");
+    console.log(`🧼 Removiendo fondo local (calidad: ${quality}), buffer:`, imageBuffer.length);
 
-    const res = await fetch("https://api.remove.bg/v1.0/removebg", {
-      method: "POST",
-      headers: {
-        "X-Api-Key": process.env.REMOVEBG_API_KEY,
-        ...formData.getHeaders(),
-      },
-      body: formData,
+    const blob = new Blob([imageBuffer], { type: "image/png" });
+    const resultBlob = await imglyRemoveBg(blob, {
+      model: quality === "large" ? "isnet" : "isnet_fp16",
+      output: { format: "image/png", quality: 1 },
     });
 
-    if (!res.ok) {
-      const txt = await res.text();
-      console.error("❌ remove.bg error:", res.status, txt);
-      return null;
-    }
-
-    const buffer = Buffer.from(await res.arrayBuffer());
-    console.log("🧼 remove.bg OK, resultado:", buffer.length, "bytes");
+    const arrayBuffer = await resultBlob.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    console.log(`🧼 Fondo removido OK (${quality}), resultado:`, buffer.length, "bytes");
     return buffer;
   } catch (err) {
-    console.error("⚠️ remove.bg excepción:", err.message);
+    console.error("⚠️ removeBackground excepción:", err.message);
     return null;
   }
 }
@@ -474,11 +463,11 @@ app.post("/api/subir-prenda", aiLimiter, upload.single("imagen"), async (req, re
     imagenOriginalBuffer = await sharp(imagenOriginalBuffer).rotate().toBuffer();
 
     if (tipo === "prenda") {
-      console.log("👕 Modo: prenda individual — quitando fondo...");
-      const sinFondo = await removeBackground(imagenOriginalBuffer);
+      console.log("👕 Modo: prenda individual — quitando fondo (calidad alta)...");
+      const sinFondo = await removeBackground(imagenOriginalBuffer, "large");
       const bufferFinal = sinFondo || imagenOriginalBuffer;
       const tieneFondo = !sinFondo;
-      if (tieneFondo) console.log("⚠️ remove.bg falló, usando imagen original");
+      if (tieneFondo) console.log("⚠️ rembg falló, usando imagen original");
 
       const cleanName = `${usuario_id}_${Date.now()}_prenda.png`;
       const { error: uploadError } = await supabase.storage
@@ -536,10 +525,15 @@ Reglas estrictas:
     }
 
     if (tipo === "outfit") {
-      console.log("🧥 Modo: outfit completo");
-      const outfitName = `${usuario_id}_${Date.now()}_outfit.jpg`;
+      console.log("🧥 Modo: outfit completo — quitando fondo (calidad media)...");
+      const sinFondo = await removeBackground(imagenOriginalBuffer, "medium");
+      const bufferOutfit = sinFondo || imagenOriginalBuffer;
+      const contentTypeOutfit = sinFondo ? "image/png" : "image/jpeg";
+      const extOutfit = sinFondo ? "png" : "jpg";
+
+      const outfitName = `${usuario_id}_${Date.now()}_outfit.${extOutfit}`;
       const { error: uploadError } = await supabase.storage
-        .from("prendas").upload(outfitName, imagenOriginalBuffer, { contentType: "image/jpeg" });
+        .from("prendas").upload(outfitName, bufferOutfit, { contentType: contentTypeOutfit });
       if (uploadError) throw uploadError;
 
       imagenOriginalUrl = supabase.storage.from("prendas").getPublicUrl(outfitName).data.publicUrl;
@@ -582,7 +576,9 @@ Reglas: colores específicos, nombres correctos, tipos: calzado/parte superior/p
       }]);
 
       return res.json({
-        mensaje: `✅ Outfit guardado con ${prendasDetectadas.length} prenda(s) detectadas`,
+        mensaje: sinFondo
+          ? `✅ Outfit guardado sin fondo con ${prendasDetectadas.length} prenda(s) detectadas`
+          : `✅ Outfit guardado con ${prendasDetectadas.length} prenda(s) detectadas`,
       });
     }
 
