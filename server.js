@@ -60,6 +60,28 @@ async function requireAuth(req, res, next) {
 /* ─────────────────────────────────────
    🧠 PARSE JSON
 ───────────────────────────────────── */
+/* ─────────────────────────────────────
+   ⚡ CACHE DE PRENDAS EN MEMORIA
+   Evita round-trips a Supabase en cada petición de fashion/swap
+───────────────────────────────────── */
+const _prendasCache = new Map(); // uid → { data, ts }
+const PRENDAS_TTL   = 3 * 60 * 1000; // 3 minutos
+
+function getCachedPrendas(uid) {
+  const e = _prendasCache.get(uid);
+  if (e && Date.now() - e.ts < PRENDAS_TTL) return e.data;
+  _prendasCache.delete(uid);
+  return null;
+}
+
+function setCachedPrendas(uid, data) {
+  _prendasCache.set(uid, { data, ts: Date.now() });
+}
+
+function invalidatePrendasCache(uid) {
+  _prendasCache.delete(uid);
+}
+
 function normalizarTipo(descripcion = "") {
   const d = descripcion.toLowerCase();
   const parts = d.split(" - ");
@@ -563,6 +585,7 @@ Reglas estrictas:
         imagen_url: imagenOriginalUrl,
         descripcion, metadata_ia: parsed || {},
       }]);
+      invalidatePrendasCache(usuario_id);
 
       return res.json({
         mensaje: tieneFondo
@@ -616,6 +639,7 @@ Reglas: colores específicos, nombres correctos, tipos: calzado/parte superior/p
         descripcion: descripcionOutfit,
         metadata_ia: { prendas: prendasDetectadas },
       }]);
+      invalidatePrendasCache(usuario_id);
 
       return res.json({
         mensaje: `✅ Outfit guardado con ${prendasDetectadas.length} prenda(s) detectadas`,
@@ -638,10 +662,19 @@ app.get("/api/prendas", async (req, res) => {
   try {
     const { usuario_id, tipo } = req.query;
     if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
+
+    // Cache solo cuando se piden todas (sin filtro de tipo)
+    if (!tipo || tipo === "todos") {
+      const cached = getCachedPrendas(usuario_id);
+      if (cached) return res.json(cached);
+    }
+
     let query = supabase.from("prendas").select("*").eq("usuario_id", usuario_id).order("created_at", { ascending: false });
     if (tipo && tipo !== "todos") query = query.eq("tipo", tipo);
     const { data, error } = await query;
     if (error) throw error;
+
+    if (!tipo || tipo === "todos") setCachedPrendas(usuario_id, data || []);
     res.json(data || []);
   } catch (err) {
     console.error("🔥 get prendas:", err.message);
@@ -660,6 +693,7 @@ app.delete("/api/prendas/:id", requireAuth, async (req, res) => {
     if (prenda.usuario_id !== req.userId) return res.status(403).json({ error: "Sin permiso" });
     const { error } = await supabase.from("prendas").delete().eq("id", id);
     if (error) throw error;
+    invalidatePrendasCache(req.userId);
     res.json({ mensaje: "🗑️ Eliminado" });
   } catch (err) {
     console.error("🔥 delete:", err.message);
@@ -675,9 +709,14 @@ app.post("/api/fashion", aiLimiter, async (req, res) => {
     const { usuario_id, mensaje, historial = [], outfit_ids_anteriores = [] } = req.body;
     if (!usuario_id || !mensaje) return res.status(400).json({ error: "Faltan datos" });
 
-    const { data: prendas, error } = await supabase
-      .from("prendas").select("id, descripcion, imagen_url, tipo, metadata_ia").eq("usuario_id", usuario_id);
-    if (error) throw error;
+    let prendas = getCachedPrendas(usuario_id);
+    if (!prendas) {
+      const { data, error } = await supabase
+        .from("prendas").select("*").eq("usuario_id", usuario_id).order("created_at", { ascending: false });
+      if (error) throw error;
+      prendas = data || [];
+      setCachedPrendas(usuario_id, prendas);
+    }
 
     if (!prendas || prendas.length === 0) {
       return res.json({
