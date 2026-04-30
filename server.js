@@ -103,12 +103,15 @@ async function removeBackground(imageBuffer, model = "birefnet-general") {
 
     console.log(`🧼 Enviando a HF Space (${model}), buffer:`, imageBuffer.length);
     const formData = new FormData();
-    formData.append("file", new Blob([imageBuffer], { type: "image/png" }), "prenda.png");
+    formData.append("file", imageBuffer, { filename: "prenda.png", contentType: "image/png" });
     formData.append("model", model);
 
     const res = await fetch(`${rembgUrl}/remove-bg`, {
       method: "POST",
-      headers: { "x-rembg-secret": process.env.REMBG_SECRET || "" },
+      headers: {
+        "x-rembg-secret": process.env.REMBG_SECRET || "",
+        ...formData.getHeaders(),
+      },
       body: formData,
     });
 
