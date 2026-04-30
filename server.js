@@ -60,6 +60,20 @@ async function requireAuth(req, res, next) {
 /* ─────────────────────────────────────
    🧠 PARSE JSON
 ───────────────────────────────────── */
+function getTipoFromDesc(descripcion = "") {
+  const parts = descripcion.split(" - ");
+  return parts[parts.length - 1]?.trim().toLowerCase() || "otro";
+}
+
+function deduplicarPorTipo(prendas) {
+  const seen = new Map();
+  for (const p of [...prendas].sort(() => Math.random() - 0.5)) {
+    const tipo = getTipoFromDesc(p.descripcion);
+    if (!seen.has(tipo)) seen.set(tipo, p);
+  }
+  return [...seen.values()];
+}
+
 function safeParseJSON(content) {
   try {
     const text = Array.isArray(content)
@@ -701,12 +715,13 @@ Tipos posibles: parte superior, parte inferior, calzado, accesorio, abrigo
 
 REGLAS DE COMBINACIÓN:
 
-1. ESTRUCTURA DEL OUTFIT — siempre respeta esta jerarquía:
-   - 1 parte superior (obligatorio si hay disponibles)
-   - 1 parte inferior (obligatorio si hay disponibles)
-   - 1 calzado (obligatorio si hay disponible)
-   - 1-2 accesorios máximo (opcional, solo si complementan el look)
+1. ESTRUCTURA DEL OUTFIT — selecciona EXACTAMENTE UNO por tipo, nunca repitas:
+   - 1 parte superior (OBLIGATORIO si hay disponibles)
+   - 1 parte inferior (OBLIGATORIO si hay disponibles)
+   - 1 calzado (OBLIGATORIO si hay disponible)
+   - 1 accesorio máximo (opcional, solo si complementa el look)
    - 1 abrigo (opcional, solo si el usuario lo pide o la ocasión lo requiere)
+   - REGLA INQUEBRANTABLE: outfit_ids NUNCA puede tener 2 prendas del mismo tipo. Si hay 2 camisetas, elige solo 1.
 
 2. TEORÍA DEL COLOR — aplica estas reglas al recomendar:
    - Neutros (negro, blanco, beige, gris, camel, café) combinan con absolutamente todo
@@ -758,13 +773,13 @@ Devuelve SIEMPRE y ÚNICAMENTE este JSON exacto sin ningún texto antes ni despu
         },
       ],
       max_tokens: 800,
-      temperature: 0.8,
+      temperature: 1.0,
     });
 
     const parsed = safeParseJSON(ai.choices[0].message.content);
 
     if (!parsed) {
-      const fallback = [...prendasSueltas].sort(() => Math.random() - 0.5).slice(0, 3);
+      const fallback = deduplicarPorTipo([...prendasSueltas].sort(() => Math.random() - 0.5));
       return res.json({
         respuesta: "Te armé una combinación con lo que tienes disponible. ¡Pruébala y dime qué piensas!",
         outfit: fallback, outfit_guardado: null, cambiar_panel: true,
@@ -781,8 +796,9 @@ Devuelve SIEMPRE y ÚNICAMENTE este JSON exacto sin ningún texto antes ni despu
       });
     }
 
-    const outfit = prendasSueltas.filter((p) => parsed.outfit_ids?.includes(p.id));
-    const fallback = [...prendasSueltas].sort(() => Math.random() - 0.5).slice(0, 3);
+    const outfitBruto = prendasSueltas.filter((p) => parsed.outfit_ids?.includes(p.id));
+    const outfit = deduplicarPorTipo(outfitBruto);
+    const fallback = deduplicarPorTipo([...prendasSueltas].sort(() => Math.random() - 0.5));
 
     res.json({
       respuesta: parsed.respuesta || "Aquí tienes un outfit que combina muy bien.",
