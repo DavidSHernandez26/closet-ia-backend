@@ -1199,7 +1199,8 @@ app.get("/api/calendario", async (req, res) => {
     if (year && month) {
       const y = String(year);
       const m = String(month).padStart(2, "0");
-      query = query.gte("fecha", `${y}-${m}-01`).lte("fecha", `${y}-${m}-31`);
+      const lastDay = new Date(parseInt(year), parseInt(month), 0).getDate();
+      query = query.gte("fecha", `${y}-${m}-01`).lte("fecha", `${y}-${m}-${lastDay}`);
     }
 
     const { data, error } = await query;
