@@ -1183,6 +1183,72 @@ app.delete("/api/notificaciones", async (req, res) => {
 });
 
 /* ─────────────────────────────────────
+   📅 CALENDARIO
+───────────────────────────────────── */
+app.get("/api/calendario", async (req, res) => {
+  try {
+    const { usuario_id, year, month } = req.query;
+    if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
+
+    let query = supabase
+      .from("calendar_outfits")
+      .select("*")
+      .eq("usuario_id", usuario_id)
+      .order("fecha", { ascending: true });
+
+    if (year && month) {
+      const y = String(year);
+      const m = String(month).padStart(2, "0");
+      query = query.gte("fecha", `${y}-${m}-01`).lte("fecha", `${y}-${m}-31`);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err) {
+    console.error("🔥 get calendario:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/calendario", requireAuth, async (req, res) => {
+  try {
+    const { fecha, imagen_url, descripcion, metadata } = req.body;
+    if (!fecha) return res.status(400).json({ error: "Falta fecha" });
+
+    const { data, error } = await supabase
+      .from("calendar_outfits")
+      .upsert(
+        { usuario_id: req.userId, fecha, imagen_url, descripcion, metadata: metadata || {} },
+        { onConflict: "usuario_id,fecha" }
+      )
+      .select().single();
+
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    console.error("🔥 post calendario:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/calendario/:id", requireAuth, async (req, res) => {
+  try {
+    const { data: entry } = await supabase
+      .from("calendar_outfits").select("usuario_id").eq("id", req.params.id).single();
+    if (!entry) return res.status(404).json({ error: "No encontrado" });
+    if (entry.usuario_id !== req.userId) return res.status(403).json({ error: "Sin permiso" });
+
+    const { error } = await supabase.from("calendar_outfits").delete().eq("id", req.params.id);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("🔥 delete calendario:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ─────────────────────────────────────
    🚀 START
 ───────────────────────────────────── */
 const PORT = process.env.PORT || 5001;
