@@ -90,34 +90,39 @@ async function descargarImagen(url) {
 }
 
 /* ─────────────────────────────────────
-   🧼 REMOVE BACKGROUND (local, sin API externa)
-   Usa @imgly/background-removal-node — corre en el mismo proceso Node.js.
-   model "medium" para outfits, "large" para prenda individual.
+   🧼 REMOVE BACKGROUND (via Hugging Face Space)
+   model: "birefnet-general" para prenda individual (alta calidad)
 ───────────────────────────────────── */
-async function removeBackground(imageBuffer, quality = "large") {
+async function removeBackground(imageBuffer, model = "birefnet-general") {
   try {
-    console.log(`🧼 Removiendo fondo local (calidad: ${quality}), buffer:`, imageBuffer.length);
+    const rembgUrl = process.env.REMBG_SERVICE_URL;
+    if (!rembgUrl) {
+      console.warn("⚠️ REMBG_SERVICE_URL no configurado, omitiendo remoción de fondo");
+      return null;
+    }
 
-    const { removeBackground: imglyRemoveBg } = await import("@imgly/background-removal-node");
+    console.log(`🧼 Enviando a HF Space (${model}), buffer:`, imageBuffer.length);
+    const formData = new FormData();
+    formData.append("file", new Blob([imageBuffer], { type: "image/png" }), "prenda.png");
+    formData.append("model", model);
 
-    // Redimensionar a 1000px máximo para reducir uso de RAM en Railway free tier
-    const pngBuffer = await sharp(imageBuffer)
-      .resize(1000, 1000, { fit: "inside", withoutEnlargement: true })
-      .png()
-      .toBuffer();
-    const blob = new Blob([pngBuffer], { type: "image/png" });
-
-    // "small" (~40MB) cabe en el plan gratuito de Railway (512MB RAM)
-    const resultBlob = await imglyRemoveBg(blob, {
-      model: "small",
-      output: { format: "image/png", quality: 1 },
+    const res = await fetch(`${rembgUrl}/remove-bg`, {
+      method: "POST",
+      headers: { "x-rembg-secret": process.env.REMBG_SECRET || "" },
+      body: formData,
     });
 
-    const buffer = Buffer.from(await resultBlob.arrayBuffer());
-    console.log(`🧼 Fondo removido OK (${quality}), resultado:`, buffer.length, "bytes");
+    if (!res.ok) {
+      const txt = await res.text();
+      console.error(`❌ rembg HF error (${model}):`, res.status, txt);
+      return null;
+    }
+
+    const buffer = Buffer.from(await res.arrayBuffer());
+    console.log(`🧼 Fondo removido OK (${model}), resultado:`, buffer.length, "bytes");
     return buffer;
   } catch (err) {
-    console.error("⚠️ removeBackground excepción:", err.message, err.stack);
+    console.error("⚠️ removeBackground excepción:", err.message);
     return null;
   }
 }
@@ -471,8 +476,8 @@ app.post("/api/subir-prenda", aiLimiter, upload.single("imagen"), async (req, re
     imagenOriginalBuffer = await sharp(imagenOriginalBuffer).rotate().toBuffer();
 
     if (tipo === "prenda") {
-      console.log("👕 Modo: prenda individual — quitando fondo (calidad alta)...");
-      const sinFondo = await removeBackground(imagenOriginalBuffer, "large");
+      console.log("👕 Modo: prenda individual — quitando fondo con birefnet-general...");
+      const sinFondo = await removeBackground(imagenOriginalBuffer, "birefnet-general");
       const bufferFinal = sinFondo || imagenOriginalBuffer;
       const tieneFondo = !sinFondo;
       if (tieneFondo) console.log("⚠️ rembg falló, usando imagen original");
