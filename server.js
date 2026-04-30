@@ -10,7 +10,7 @@ import sharp from "sharp";
 import { createClient } from "@supabase/supabase-js";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import imglyRemoveBg from "@imgly/background-removal-node";
+import { removeBackground as imglyRemoveBg } from "@imgly/background-removal-node";
 
 dotenv.config();
 
@@ -98,18 +98,20 @@ async function removeBackground(imageBuffer, quality = "large") {
   try {
     console.log(`🧼 Removiendo fondo local (calidad: ${quality}), buffer:`, imageBuffer.length);
 
-    const blob = new Blob([imageBuffer], { type: "image/png" });
+    // Convertir a PNG para garantizar compatibilidad con el modelo
+    const pngBuffer = await sharp(imageBuffer).png().toBuffer();
+    const blob = new Blob([pngBuffer], { type: "image/png" });
+
     const resultBlob = await imglyRemoveBg(blob, {
-      model: quality === "large" ? "isnet" : "isnet_fp16",
+      model: quality === "large" ? "medium" : "small",
       output: { format: "image/png", quality: 1 },
     });
 
-    const arrayBuffer = await resultBlob.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+    const buffer = Buffer.from(await resultBlob.arrayBuffer());
     console.log(`🧼 Fondo removido OK (${quality}), resultado:`, buffer.length, "bytes");
     return buffer;
   } catch (err) {
-    console.error("⚠️ removeBackground excepción:", err.message);
+    console.error("⚠️ removeBackground excepción:", err.message, err.stack);
     return null;
   }
 }
@@ -525,15 +527,10 @@ Reglas estrictas:
     }
 
     if (tipo === "outfit") {
-      console.log("🧥 Modo: outfit completo — quitando fondo (calidad media)...");
-      const sinFondo = await removeBackground(imagenOriginalBuffer, "medium");
-      const bufferOutfit = sinFondo || imagenOriginalBuffer;
-      const contentTypeOutfit = sinFondo ? "image/png" : "image/jpeg";
-      const extOutfit = sinFondo ? "png" : "jpg";
-
-      const outfitName = `${usuario_id}_${Date.now()}_outfit.${extOutfit}`;
+      console.log("🧥 Modo: outfit completo");
+      const outfitName = `${usuario_id}_${Date.now()}_outfit.jpg`;
       const { error: uploadError } = await supabase.storage
-        .from("prendas").upload(outfitName, bufferOutfit, { contentType: contentTypeOutfit });
+        .from("prendas").upload(outfitName, imagenOriginalBuffer, { contentType: "image/jpeg" });
       if (uploadError) throw uploadError;
 
       imagenOriginalUrl = supabase.storage.from("prendas").getPublicUrl(outfitName).data.publicUrl;
@@ -576,9 +573,7 @@ Reglas: colores específicos, nombres correctos, tipos: calzado/parte superior/p
       }]);
 
       return res.json({
-        mensaje: sinFondo
-          ? `✅ Outfit guardado sin fondo con ${prendasDetectadas.length} prenda(s) detectadas`
-          : `✅ Outfit guardado con ${prendasDetectadas.length} prenda(s) detectadas`,
+        mensaje: `✅ Outfit guardado con ${prendasDetectadas.length} prenda(s) detectadas`,
       });
     }
 
