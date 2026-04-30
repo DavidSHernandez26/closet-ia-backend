@@ -101,10 +101,10 @@ async function removeBackground(imageBuffer, model = "birefnet-general") {
       return null;
     }
 
-    // Reducir a 600px — suficiente para closet app, procesa ~2x más rápido que 800px
+    // 512px es suficiente para el closet y procesa ~4x más rápido que 800px en CPU
     const resizedBuffer = await sharp(imageBuffer)
-      .resize(600, 600, { fit: "inside", withoutEnlargement: true })
-      .jpeg({ quality: 90 })
+      .resize(512, 512, { fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality: 85 })
       .toBuffer();
 
     console.log(`🧼 Enviando a HF Space (${model}), buffer reducido:`, resizedBuffer.length);
@@ -485,8 +485,8 @@ app.post("/api/subir-prenda", aiLimiter, upload.single("imagen"), async (req, re
     imagenOriginalBuffer = await sharp(imagenOriginalBuffer).rotate().toBuffer();
 
     if (tipo === "prenda") {
-      console.log("👕 Modo: prenda individual — quitando fondo con birefnet-general...");
-      const sinFondo = await removeBackground(imagenOriginalBuffer, "birefnet-general");
+      console.log("👕 Modo: prenda individual — quitando fondo con isnet-general-use...");
+      const sinFondo = await removeBackground(imagenOriginalBuffer, "isnet-general-use");
       const bufferFinal = sinFondo || imagenOriginalBuffer;
       const tieneFondo = !sinFondo;
       if (tieneFondo) console.log("⚠️ rembg falló, usando imagen original");
