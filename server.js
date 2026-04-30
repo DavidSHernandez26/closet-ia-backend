@@ -101,9 +101,15 @@ async function removeBackground(imageBuffer, model = "birefnet-general") {
       return null;
     }
 
-    console.log(`🧼 Enviando a HF Space (${model}), buffer:`, imageBuffer.length);
+    // Reducir a 800px máximo antes de enviar — menos píxeles = más rápido en HF CPU
+    const resizedBuffer = await sharp(imageBuffer)
+      .resize(800, 800, { fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality: 90 })
+      .toBuffer();
+
+    console.log(`🧼 Enviando a HF Space (${model}), buffer reducido:`, resizedBuffer.length);
     const formData = new FormData();
-    formData.append("file", imageBuffer, { filename: "prenda.png", contentType: "image/png" });
+    formData.append("file", resizedBuffer, { filename: "prenda.jpg", contentType: "image/jpeg" });
     formData.append("model", model);
 
     const res = await fetch(`${rembgUrl}/remove-bg`, {
@@ -479,8 +485,8 @@ app.post("/api/subir-prenda", aiLimiter, upload.single("imagen"), async (req, re
     imagenOriginalBuffer = await sharp(imagenOriginalBuffer).rotate().toBuffer();
 
     if (tipo === "prenda") {
-      console.log("👕 Modo: prenda individual — quitando fondo con birefnet-general...");
-      const sinFondo = await removeBackground(imagenOriginalBuffer, "birefnet-general");
+      console.log("👕 Modo: prenda individual — quitando fondo con u2net_cloth_seg...");
+      const sinFondo = await removeBackground(imagenOriginalBuffer, "u2net_cloth_seg");
       const bufferFinal = sinFondo || imagenOriginalBuffer;
       const tieneFondo = !sinFondo;
       if (tieneFondo) console.log("⚠️ rembg falló, usando imagen original");
