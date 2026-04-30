@@ -60,15 +60,25 @@ async function requireAuth(req, res, next) {
 /* ─────────────────────────────────────
    🧠 PARSE JSON
 ───────────────────────────────────── */
-function getTipoFromDesc(descripcion = "") {
-  const parts = descripcion.split(" - ");
-  return parts[parts.length - 1]?.trim().toLowerCase() || "otro";
+function normalizarTipo(descripcion = "") {
+  const d = descripcion.toLowerCase();
+  const parts = d.split(" - ");
+  const tipoAlmacenado = parts[parts.length - 1]?.trim() || "otro";
+  const nombreParte = parts.slice(0, -1).join(" ");
+  // Sudaderas y hoodies van en la misma capa que chaquetas → abrigo
+  if (
+    tipoAlmacenado === "parte superior" &&
+    (nombreParte.includes("sudadera") || nombreParte.includes("hoodie") || nombreParte.includes("sweatshirt"))
+  ) {
+    return "abrigo";
+  }
+  return tipoAlmacenado;
 }
 
 function deduplicarPorTipo(prendas) {
   const seen = new Map();
   for (const p of [...prendas].sort(() => Math.random() - 0.5)) {
-    const tipo = getTipoFromDesc(p.descripcion);
+    const tipo = normalizarTipo(p.descripcion);
     if (!seen.has(tipo)) seen.set(tipo, p);
   }
   return [...seen.values()];
@@ -531,7 +541,8 @@ Reglas estrictas:
 - Para el color: sé muy específico (café, marrón, beige, crema, burdeos, mostaza, camel, terracota, verde oliva, azul marino, etc). NO uses colores genéricos.
 - Si hay varios colores menciona el principal: "negro con blanco".
 - Para el nombre: usa el término correcto (tenis, botines, mocasines, chaqueta, sudadera, hoodie, polo, blusa, etc).
-- Para el tipo: usa únicamente: calzado, parte superior, parte inferior, accesorio, abrigo.`,
+- Para el tipo: usa únicamente: calzado, parte superior, parte inferior, accesorio, abrigo.
+- Sudaderas, hoodies, chaquetas, chamarras, blazers, sacos → tipo SIEMPRE "abrigo".`,
             },
             { type: "image_url", image_url: { url: imagenOriginalUrl, detail: "high" } },
           ],
@@ -722,6 +733,7 @@ REGLAS DE COMBINACIÓN:
    - 1 accesorio máximo (opcional, solo si complementa el look)
    - 1 abrigo (opcional, solo si el usuario lo pide o la ocasión lo requiere)
    - REGLA INQUEBRANTABLE: outfit_ids NUNCA puede tener 2 prendas del mismo tipo. Si hay 2 camisetas, elige solo 1.
+   - Sudaderas y chaquetas son el MISMO tipo (abrigo/capa exterior). Nunca incluyas ambas a la vez.
 
 2. TEORÍA DEL COLOR — aplica estas reglas al recomendar:
    - Neutros (negro, blanco, beige, gris, camel, café) combinan con absolutamente todo
