@@ -10,7 +10,6 @@ import sharp from "sharp";
 import { createClient } from "@supabase/supabase-js";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import { removeBackground as imglyRemoveBg } from "@imgly/background-removal-node";
 
 dotenv.config();
 
@@ -98,7 +97,8 @@ async function removeBackground(imageBuffer, quality = "large") {
   try {
     console.log(`🧼 Removiendo fondo local (calidad: ${quality}), buffer:`, imageBuffer.length);
 
-    // Convertir a PNG para garantizar compatibilidad con el modelo
+    const { removeBackground: imglyRemoveBg } = await import("@imgly/background-removal-node");
+
     const pngBuffer = await sharp(imageBuffer).png().toBuffer();
     const blob = new Blob([pngBuffer], { type: "image/png" });
 
