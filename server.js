@@ -14,6 +14,7 @@ import rateLimit from "express-rate-limit";
 dotenv.config();
 
 const app = express();
+app.set("trust proxy", 1); // necesario para Railway (proxy inverso)
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
   contentSecurityPolicy: false,
@@ -99,11 +100,16 @@ async function removeBackground(imageBuffer, quality = "large") {
 
     const { removeBackground: imglyRemoveBg } = await import("@imgly/background-removal-node");
 
-    const pngBuffer = await sharp(imageBuffer).png().toBuffer();
+    // Redimensionar a 1000px máximo para reducir uso de RAM en Railway free tier
+    const pngBuffer = await sharp(imageBuffer)
+      .resize(1000, 1000, { fit: "inside", withoutEnlargement: true })
+      .png()
+      .toBuffer();
     const blob = new Blob([pngBuffer], { type: "image/png" });
 
+    // "small" (~40MB) cabe en el plan gratuito de Railway (512MB RAM)
     const resultBlob = await imglyRemoveBg(blob, {
-      model: quality === "large" ? "medium" : "small",
+      model: "small",
       output: { format: "image/png", quality: 1 },
     });
 
