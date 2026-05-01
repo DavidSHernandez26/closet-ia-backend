@@ -867,6 +867,44 @@ Devuelve SIEMPRE y ÚNICAMENTE este JSON exacto sin ningún texto antes ni despu
 });
 
 /* ─────────────────────────────────────
+   📊 ESTADÍSTICAS — recomendaciones de compra con IA
+───────────────────────────────────────── */
+app.post("/api/recomendaciones-compra", async (req, res) => {
+  try {
+    const { usuario_id } = req.body;
+    if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
+
+    let prendas = getCachedPrendas(usuario_id);
+    if (!prendas) {
+      const { data, error } = await supabase
+        .from("prendas").select("*").eq("usuario_id", usuario_id).eq("tipo", "prenda");
+      if (error) throw error;
+      prendas = data || [];
+    }
+    const sueltas = prendas.filter(p => p.tipo === "prenda");
+    if (sueltas.length === 0) {
+      return res.json({ recomendaciones: ["Sube tus primeras prendas para recibir sugerencias"] });
+    }
+
+    const lista = sueltas.map(p => p.descripcion).join("\n");
+    const ai = await openai.chat.completions.create({
+      model: MODEL,
+      messages: [{
+        role: "user",
+        content: `Analiza este closet y dame exactamente 3 recomendaciones MUY cortas (máx 10 palabras cada una) de prendas que debería comprar para completarlo o mejorar sus combinaciones. Solo el nombre de la prenda/sugerencia, sin explicación larga.\n\nCloset:\n${lista}\n\nDevuelve SOLO este JSON: {"recomendaciones":["...","...","..."]}`,
+      }],
+      temperature: 0.7,
+      max_tokens: 150,
+    });
+    const parsed = safeParseJSON(ai.choices[0].message.content);
+    res.json({ recomendaciones: parsed?.recomendaciones || [] });
+  } catch (err) {
+    console.error("📊 recomendaciones:", err.message);
+    res.status(500).json({ recomendaciones: [] });
+  }
+});
+
+/* ─────────────────────────────────────
    🔢 HELPER — enrich posts (Fix 1: evita N+1 queries)
    3 queries totales sin importar cuántos posts haya
 ───────────────────────────────────── */
