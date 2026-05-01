@@ -566,7 +566,7 @@ Reglas estrictas:
 - Para el tipo: usa únicamente: calzado, parte superior, parte inferior, accesorio, abrigo.
 - Sudaderas, hoodies, chaquetas, chamarras, blazers, sacos → tipo SIEMPRE "abrigo".`,
             },
-            { type: "image_url", image_url: { url: imagenOriginalUrl, detail: "high" } },
+            { type: "image_url", image_url: { url: imagenOriginalUrl, detail: "low" } },
           ],
         }],
         temperature: 0,
@@ -621,7 +621,7 @@ Analiza este outfit y devuelve SOLO este JSON:
 }
 Reglas: colores específicos, nombres correctos, tipos: calzado/parte superior/parte inferior/accesorio/abrigo. Incluye TODAS las prendas visibles.`,
             },
-            { type: "image_url", image_url: { url: imagenOriginalUrl, detail: "high" } },
+            { type: "image_url", image_url: { url: imagenOriginalUrl, detail: "low" } },
           ],
         }],
         temperature: 0,
