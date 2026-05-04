@@ -706,7 +706,7 @@ app.delete("/api/prendas/:id", requireAuth, async (req, res) => {
 ───────────────────────────────────── */
 app.post("/api/fashion", aiLimiter, async (req, res) => {
   try {
-    const { usuario_id, mensaje, historial = [], outfit_ids_anteriores = [] } = req.body;
+    const { usuario_id, mensaje, historial = [], outfit_ids_anteriores = [], clima } = req.body;
     if (!usuario_id || !mensaje) return res.status(400).json({ error: "Faltan datos" });
 
     let prendas = getCachedPrendas(usuario_id);
@@ -750,6 +750,10 @@ app.post("/api/fashion", aiLimiter, async (req, res) => {
     const historialTexto = historial.length > 0
       ? "\n\nHISTORIAL DE CONVERSACIÓN:\n" +
         historial.map((h) => `${h.role === "user" ? "Usuario" : "Asistente"}: ${h.text}`).join("\n")
+      : "";
+
+    const contextoClima = clima
+      ? `\n\nCLIMA ACTUAL: ${clima}\nAdapta el outfit a estas condiciones: sugiere abrigo si hace frío o llueve, telas ligeras si hace calor, impermeables si llueve, etc.`
       : "";
 
     const ai = await openai.chat.completions.create({
@@ -820,7 +824,7 @@ Devuelve SIEMPRE y ÚNICAMENTE este JSON exacto sin ningún texto antes ni despu
         },
         {
           role: "user",
-          content: `${contextoPrendas}${contextoOutfits}${contextoActual}${historialTexto}\n\nMensaje del usuario: ${mensaje}`,
+          content: `${contextoPrendas}${contextoOutfits}${contextoActual}${contextoClima}${historialTexto}\n\nMensaje del usuario: ${mensaje}`,
         },
       ],
       max_tokens: 800,
