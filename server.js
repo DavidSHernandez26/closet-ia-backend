@@ -287,10 +287,10 @@ app.get("/api/usuarios/sugeridos", async (req, res) => {
   }
 });
 
-app.put("/api/perfil", async (req, res) => {
+app.put("/api/perfil", requireAuth, async (req, res) => {
   try {
-    const { usuario_id, username, nombre, bio } = req.body;
-    if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
+    const usuario_id = req.userId;
+    const { username, nombre, bio } = req.body;
 
     if (username) {
       const { data: existing } = await supabase
@@ -345,10 +345,11 @@ app.post("/api/perfil/avatar", upload.single("avatar"), async (req, res) => {
 /* ─────────────────────────────────────
    👥 AMISTADES
 ───────────────────────────────────── */
-app.post("/api/amistad/solicitar", async (req, res) => {
+app.post("/api/amistad/solicitar", requireAuth, async (req, res) => {
   try {
-    const { requester_id, addressee_id } = req.body;
-    if (!requester_id || !addressee_id) return res.status(400).json({ error: "Faltan datos" });
+    const requester_id = req.userId;
+    const { addressee_id } = req.body;
+    if (!addressee_id) return res.status(400).json({ error: "Faltan datos" });
     if (requester_id === addressee_id) return res.status(400).json({ error: "No puedes agregarte a ti mismo" });
 
     const { data: existing } = await supabase
@@ -511,10 +512,10 @@ app.get("/api/prendas/amigo/:amigo_id", async (req, res) => {
 /* ─────────────────────────────────────
    📸 SUBIR PRENDA / OUTFIT
 ───────────────────────────────────── */
-app.post("/api/subir-prenda", aiLimiter, upload.single("imagen"), async (req, res) => {
+app.post("/api/subir-prenda", requireAuth, aiLimiter, upload.single("imagen"), async (req, res) => {
   try {
-    const { usuario_id, genero = "unisex", tipo = "prenda", imagen_url } = req.body;
-    if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
+    const usuario_id = req.userId;
+    const { genero = "unisex", tipo = "prenda", imagen_url } = req.body;
     if (!req.file && !imagen_url) return res.status(400).json({ error: "No se envió imagen" });
 
     let imagenOriginalUrl = imagen_url;
@@ -943,10 +944,10 @@ async function enrichPosts(posts, postIds, viewerUserId) {
 /* ─────────────────────────────────────
    📸 POSTS — FEED
 ───────────────────────────────────── */
-app.post("/api/posts", upload.single("imagen"), async (req, res) => {
+app.post("/api/posts", requireAuth, upload.single("imagen"), async (req, res) => {
   try {
-    const { usuario_id, descripcion, prendas } = req.body;
-    if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
+    const usuario_id = req.userId;
+    const { descripcion, prendas } = req.body;
     if (!req.file) return res.status(400).json({ error: "Falta imagen" });
 
     const buffer = await fs.promises.readFile(req.file.path);
@@ -1049,10 +1050,11 @@ app.delete("/api/posts/:id", requireAuth, async (req, res) => {
 /* ─────────────────────────────────────
    ❤️ LIKES (con notificación)
 ───────────────────────────────────── */
-app.post("/api/likes", async (req, res) => {
+app.post("/api/likes", requireAuth, async (req, res) => {
   try {
-    const { post_id, usuario_id } = req.body;
-    if (!post_id || !usuario_id) return res.status(400).json({ error: "Faltan datos" });
+    const usuario_id = req.userId;
+    const { post_id } = req.body;
+    if (!post_id) return res.status(400).json({ error: "Faltan datos" });
 
     const { data: existing } = await supabase
       .from("likes").select("id").eq("post_id", post_id).eq("usuario_id", usuario_id).single();
@@ -1102,10 +1104,11 @@ app.get("/api/comments/:post_id", async (req, res) => {
   }
 });
 
-app.post("/api/comments", async (req, res) => {
+app.post("/api/comments", requireAuth, async (req, res) => {
   try {
-    const { post_id, usuario_id, texto } = req.body;
-    if (!post_id || !usuario_id || !texto?.trim()) return res.status(400).json({ error: "Faltan datos" });
+    const usuario_id = req.userId;
+    const { post_id, texto } = req.body;
+    if (!post_id || !texto?.trim()) return res.status(400).json({ error: "Faltan datos" });
 
     const { data, error } = await supabase
       .from("comments")
@@ -1132,9 +1135,12 @@ app.post("/api/comments", async (req, res) => {
   }
 });
 
-app.delete("/api/comments/:id", async (req, res) => {
+app.delete("/api/comments/:id", requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
+    const { data: comment } = await supabase.from("comments").select("usuario_id").eq("id", id).single();
+    if (!comment) return res.status(404).json({ error: "Comentario no encontrado" });
+    if (comment.usuario_id !== req.userId) return res.status(403).json({ error: "Sin permiso" });
     const { error } = await supabase.from("comments").delete().eq("id", id);
     if (error) throw error;
     res.json({ mensaje: "🗑️ Comentario eliminado" });
