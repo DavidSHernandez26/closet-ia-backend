@@ -132,9 +132,9 @@ function deduplicarPorTipo(prendas) {
     // Con vestido: no incluir parte superior ni parte inferior
     if (hayVestido && (tipo === "parte superior" || tipo === "parte inferior")) continue;
 
-    // Accesorios: permitir hasta 2
+    // Accesorios: sin límite — cada uno es una entrada única
     if (tipo === "accesorio") {
-      if (accesoriosCount < 2) { seen.set(`accesorio_${accesoriosCount}`, p); accesoriosCount++; }
+      seen.set(`accesorio_${accesoriosCount}`, p); accesoriosCount++;
       continue;
     }
 
@@ -1029,13 +1029,13 @@ REGLAS DE COMBINACIÓN
    • 1 parte inferior — pantalón, jean, short, falda (OBLIGATORIO)
    • 1 calzado (OBLIGATORIO)
    • 1 abrigo — chaqueta, sudadera, blazer (OBLIGATORIO si sensación < 18°C o lluvia ≥ 40%; omitir si > 25°C)
-   • 1–2 accesorios — gorra, bandolera/bolso, reloj, manilla, collar, cinturón, lentes (si hay disponibles y suman)
+   • accesorios — gorra, bandolera/bolso, reloj, manilla, collar, cinturón, lentes, bufanda (incluye TODOS los que tengas disponibles y que realmente aporten al look; sin límite)
 
    ── PLANTILLA B: VESTIDO / JUMPSUIT / MONO ──
    • 1 vestido / jumpsuit / mono completo (reemplaza parte superior + inferior — NUNCA añadir pantalón ni camiseta)
    • 1 calzado (OBLIGATORIO)
    • 1 abrigo (OBLIGATORIO si sensación < 18°C; OPCIONAL si templado; OMITIR si > 25°C)
-   • 1–2 accesorios (si hay disponibles y suman al look)
+   • accesorios (todos los disponibles que aporten — sin límite)
 
    REGLAS GLOBALES:
    ✗ NUNCA mezclar plantillas (vestido + pantalón = error grave)
