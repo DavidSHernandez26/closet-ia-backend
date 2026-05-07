@@ -835,6 +835,37 @@ fit: slim | regular | oversized | ajustado | holgado`,
    👗 FASHION IA
 ───────────────────────────────────── */
 
+/* Genera contexto climático obligatorio y accionable para la IA */
+function generarContextoClima(c) {
+  if (!c || typeof c !== "object") {
+    return `\n\nCLIMA: No disponible. Aplica igual criterio climático usando la metadata de temporada/material de cada prenda. Si hay prendas de abrigo disponibles, priorízalas ante la duda.`;
+  }
+
+  const { temp, feels, wind = 0, city = "tu ciudad", label = "", rain_prob = 0 } = c;
+  const sensacion = feels ?? temp;
+
+  let capaRegla, telas, urgencia;
+  if      (sensacion < 5)  { urgencia = "🥶 FRÍO EXTREMO";  capaRegla = "ABRIGO GRUESO OBLIGATORIO — sin él el outfit es inadecuado para salir";   telas = "lana, polar, plumas, pana, denim grueso"; }
+  else if (sensacion < 12) { urgencia = "🧥 FRÍO";          capaRegla = "CHAQUETA O ABRIGO OBLIGATORIO — debe aparecer en outfit_ids si existe";    telas = "lana, algodón grueso, punto, denim"; }
+  else if (sensacion < 18) { urgencia = "🌤 FRESCO";        capaRegla = "Capa media RECOMENDADA: suéter, cardigan o chaqueta ligera";               telas = "algodón, denim ligero, punto fino"; }
+  else if (sensacion < 25) { urgencia = "🌿 TEMPLADO";      capaRegla = "Sin capas pesadas — temperatura agradable, prioriza comodidad";            telas = "algodón, mezclas ligeras, denim"; }
+  else                     { urgencia = "☀️ CALOR";          capaRegla = "Ropa ligera y transpirable OBLIGATORIA — NUNCA abrigos ni suéteres gruesos"; telas = "lino, algodón ligero, tejidos transpirables"; }
+
+  const lluviaLinea = rain_prob >= 40
+    ? `\n• Lluvia: ${rain_prob}% de probabilidad → incluye abrigo impermeable/capa resistente al agua si el closet lo tiene; EVITA lino, seda, ante/suede`
+    : "";
+  const vientoLinea = wind >= 25
+    ? `\n• Viento: ${wind} km/h → prioriza prendas con cierre completo o fit ajustado`
+    : "";
+
+  return `\n\n${urgencia} EN ${city.toUpperCase()} — REGLAS CLIMÁTICAS (NO NEGOCIABLES):
+• Temperatura: ${temp}°C · Sensación térmica: ${sensacion}°C · Condición: ${label}${lluviaLinea}${vientoLinea}
+• ${capaRegla}
+• Telas apropiadas para ${sensacion}°C: ${telas}
+
+⚠️ EL CLIMA ES PRIORIDAD ABSOLUTA: un outfit que ignora ${sensacion}°C de sensación térmica es incorrecto, sin importar qué tan bien combine visualmente.`;
+}
+
 /* Formatea una prenda con toda su metadata estructurada */
 function formatPrendaRica(p) {
   const m = p.metadata_ia || {};
@@ -945,9 +976,7 @@ app.post("/api/fashion", requireAuth, aiLimiter, async (req, res) => {
       : "";
 
     /* ── Contexto 7: Clima ── */
-    const contextoClima = clima
-      ? `\n\nCLIMA ACTUAL: ${clima}\nAdapta telas y capas: abrigo si <15°C o lluvia, ligero si >25°C, medio si 15-25°C.`
-      : "";
+    const contextoClima = generarContextoClima(clima);
 
     /* ── Aviso de prendas usadas recientemente ── */
     const prendas_usadas_ids = [...IDS_RECIENTES];
@@ -973,9 +1002,10 @@ REGLAS DE COMBINACIÓN
    • 1 parte inferior (OBLIGATORIO)
    • 1 calzado (OBLIGATORIO)
    • 1 accesorio máximo (OPCIONAL — solo si suma al look)
-   • 1 abrigo (OPCIONAL — solo si el clima o la ocasión lo requiere)
+   • 1 abrigo (OBLIGATORIO si sensación < 18°C o lluvia ≥ 40%; OPCIONAL si hace calor)
    ✗ NUNCA 2 prendas del mismo tipo en outfit_ids
    ✗ Sudadera y chaqueta = mismo tipo (abrigo). Solo una.
+   ✗ Si no hay abrigo disponible y hace frío, díselo al usuario en la respuesta
 
 2. TEORÍA DEL COLOR:
    • Neutros (negro, blanco, beige, gris, camel, marino) van con todo
