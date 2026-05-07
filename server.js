@@ -1699,8 +1699,10 @@ app.get("/api/racha", requireAuth, async (req, res) => {
 
     if (error) throw error;
 
-    // Fechas únicas ordenadas de más reciente a más antigua
-    const fechas = [...new Set((data || []).map(e => e.fecha))].sort().reverse();
+    // Normalizar a YYYY-MM-DD y deduplicar
+    const fechas = [...new Set(
+      (data || []).map(e => (e.fecha || "").slice(0, 10)).filter(Boolean)
+    )].sort().reverse();
 
     if (!fechas.length) return res.json({ racha: 0, ultimaFecha: null });
 
