@@ -612,7 +612,11 @@ app.post("/api/subir-prenda", requireAuth, aiLimiter, upload.single("imagen"), a
             {
               type: "text",
               text: `Eres un experto en moda y retail con visión detallada.
-Analiza esta prenda con mucho cuidado y devuelve SOLO este JSON (sin texto extra):
+Primero determina si la imagen contiene una prenda de ropa, calzado o accesorio de moda.
+Si NO es una prenda (por ejemplo: persona, paisaje, comida, animal, objeto, etc.), devuelve SOLO:
+{"tipo":"no_prenda"}
+
+Si SÍ es una prenda, devuelve SOLO este JSON (sin texto extra):
 {
   "nombre": "tenis",
   "color": "café/marrón",
@@ -644,6 +648,13 @@ Reglas para cada campo:
       });
 
       const parsed = safeParseJSON(ai.choices[0].message.content);
+
+      // Si la IA detecta que no es una prenda, eliminar de storage y rechazar
+      if (parsed?.tipo === "no_prenda") {
+        await supabase.storage.from("prendas").remove([cleanName]);
+        return res.status(422).json({ error: "La imagen no parece contener una prenda de ropa, calzado o accesorio." });
+      }
+
       const nombre = parsed?.nombre || "prenda";
       const color = parsed?.color || "?";
       const tipoPrenda = parsed?.tipo || "?";
@@ -1697,7 +1708,10 @@ app.get("/api/racha", requireAuth, async (req, res) => {
       .eq("usuario_id", usuario_id)
       .order("fecha", { ascending: false });
 
-    if (error) throw error;
+    if (error) {
+      console.error("🔥 racha query:", error.message);
+      return res.json({ racha: 0, ultimaFecha: null, registroHoy: false });
+    }
 
     // Normalizar a YYYY-MM-DD y deduplicar
     const fechas = [...new Set(
