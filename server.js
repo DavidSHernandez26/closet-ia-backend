@@ -118,11 +118,28 @@ function normalizarTipo(descripcion = "", metaIa = {}) {
   return tipo;
 }
 
+function subtipoAccesorio(p) {
+  const texto = ((p.metadata_ia?.nombre || '') + ' ' + (p.descripcion || '')).toLowerCase();
+  if (/gorra|cap|sombrero|boina|snapback|beanie/.test(texto))           return 'gorra';
+  if (/cintur[oó]n|belt|correa/.test(texto))                            return 'cinturon';
+  if (/reloj|watch/.test(texto))                                        return 'reloj';
+  if (/manilla|pulsera|brazalete/.test(texto))                          return 'manilla';
+  if (/collar|cadena|colgante|necklace/.test(texto))                    return 'collar';
+  if (/bandolera|crossbody/.test(texto))                                return 'bandolera';
+  if (/bolso|cartera|tote|clutch|maletín/.test(texto))                  return 'bolso';
+  if (/mochila|backpack/.test(texto))                                   return 'mochila';
+  if (/lentes|gafas|anteojos|sunglasses/.test(texto))                   return 'lentes';
+  if (/bufanda|pa[ñn]uelo|scarf/.test(texto))                           return 'bufanda';
+  // fallback: primer token del nombre en metadata_ia
+  return (p.metadata_ia?.nombre || 'misc').toLowerCase().split(' ')[0];
+}
+
 function deduplicarPorTipo(prendas) {
   const tipos = prendas.map(p => normalizarTipo(p.descripcion, p.metadata_ia));
   const hayVestido = tipos.includes("vestido");
 
   const seen = new Map();
+  const seenAccesorios = new Set();
   let accesoriosCount = 0;
 
   for (let i = 0; i < prendas.length; i++) {
@@ -132,9 +149,14 @@ function deduplicarPorTipo(prendas) {
     // Con vestido: no incluir parte superior ni parte inferior
     if (hayVestido && (tipo === "parte superior" || tipo === "parte inferior")) continue;
 
-    // Accesorios: sin límite — cada uno es una entrada única
+    // Accesorios: máx 1 por sub-tipo (1 gorra, 1 cinturón, 1 reloj…)
     if (tipo === "accesorio") {
-      seen.set(`accesorio_${accesoriosCount}`, p); accesoriosCount++;
+      const sub = subtipoAccesorio(p);
+      if (!seenAccesorios.has(sub)) {
+        seenAccesorios.add(sub);
+        seen.set(`accesorio_${accesoriosCount}`, p);
+        accesoriosCount++;
+      }
       continue;
     }
 
