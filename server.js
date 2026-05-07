@@ -100,25 +100,44 @@ function invalidatePrendasCache(uid) {
   _prendasCache.delete(uid);
 }
 
-function normalizarTipo(descripcion = "") {
+function normalizarTipo(descripcion = "", metaIa = {}) {
+  // Prioridad: metadata_ia.tipo > tipo al final de la descripción
+  const tipoMeta = (metaIa?.tipo || "").toLowerCase().trim();
   const d = descripcion.toLowerCase();
   const parts = d.split(" - ");
-  const tipoAlmacenado = parts[parts.length - 1]?.trim() || "otro";
+  const tipoDesc = parts[parts.length - 1]?.trim() || "";
   const nombreParte = parts.slice(0, -1).join(" ");
-  // Sudaderas y hoodies van en la misma capa que chaquetas → abrigo
-  if (
-    tipoAlmacenado === "parte superior" &&
-    (nombreParte.includes("sudadera") || nombreParte.includes("hoodie") || nombreParte.includes("sweatshirt"))
-  ) {
-    return "abrigo";
-  }
-  return tipoAlmacenado;
+  const tipo = tipoMeta || tipoDesc || "otro";
+
+  // Vestido / jumpsuit / mono completo — categoría propia
+  if (tipo === "vestido" || /vestido|dress|jumpsuit|mono completo|enterizo/.test(nombreParte)) return "vestido";
+
+  // Sudaderas y hoodies van con abrigo
+  if (tipo === "parte superior" && /sudadera|hoodie|sweatshirt/.test(nombreParte)) return "abrigo";
+
+  return tipo;
 }
 
 function deduplicarPorTipo(prendas) {
+  const tipos = prendas.map(p => normalizarTipo(p.descripcion, p.metadata_ia));
+  const hayVestido = tipos.includes("vestido");
+
   const seen = new Map();
-  for (const p of [...prendas].sort(() => Math.random() - 0.5)) {
-    const tipo = normalizarTipo(p.descripcion);
+  let accesoriosCount = 0;
+
+  for (let i = 0; i < prendas.length; i++) {
+    const p    = prendas[i];
+    const tipo = tipos[i];
+
+    // Con vestido: no incluir parte superior ni parte inferior
+    if (hayVestido && (tipo === "parte superior" || tipo === "parte inferior")) continue;
+
+    // Accesorios: permitir hasta 2
+    if (tipo === "accesorio") {
+      if (accesoriosCount < 2) { seen.set(`accesorio_${accesoriosCount}`, p); accesoriosCount++; }
+      continue;
+    }
+
     if (!seen.has(tipo)) seen.set(tipo, p);
   }
   return [...seen.values()];
@@ -585,7 +604,10 @@ Analiza esta prenda con mucho cuidado y devuelve SOLO este JSON (sin texto extra
 Reglas para cada campo:
 - color: muy específico (café, marrón, beige, crema, burdeos, mostaza, camel, terracota, verde oliva, azul marino). Principal si hay varios: "negro con blanco".
 - nombre: término correcto (tenis, botines, mocasines, chaqueta, sudadera, hoodie, polo, blusa, etc).
-- tipo: SOLO uno de: calzado, parte superior, parte inferior, accesorio, abrigo. Sudaderas/hoodies/chaquetas/blazers → abrigo.
+- tipo: SOLO uno de: calzado, parte superior, parte inferior, accesorio, abrigo, vestido.
+  vestido = vestidos, monos completos, jumpsuits, enterizos (prendas que cubren torso y piernas en una sola pieza).
+  abrigo = chaquetas, sudaderas, hoodies, blazers, sacos, abrigos.
+  accesorio = gorras, bolsos, bandoleras, relojes, manillas, collares, cinturones, lentes, bufandas.
 - material: algodón, poliéster, lino, denim, cuero, lana, seda, sintético, punto, etc.
 - temporada: verano, invierno, primavera/otoño, todo el año.
 - estilo: casual, formal, deportivo, elegante, streetwear, bohemio, minimalista, etc.
@@ -778,7 +800,10 @@ app.post("/api/prendas/reanalizar", requireAuth, aiLimiter, async (req, res) => 
   "patron": "...",
   "fit": "..."
 }
-tipo: calzado | parte superior | parte inferior | accesorio | abrigo (sudaderas/hoodies/chaquetas → abrigo)
+tipo: calzado | parte superior | parte inferior | accesorio | abrigo | vestido
+  abrigo = chaquetas/sudaderas/hoodies/blazers
+  vestido = vestidos/monos/jumpsuits/enterizos
+  accesorio = gorras/bolsos/relojes/manillas/collares/cinturones/lentes
 material: algodón, denim, cuero, lana, lino, poliéster, punto, sintético, seda...
 temporada: verano | invierno | primavera/otoño | todo el año
 estilo: casual | formal | deportivo | streetwear | elegante | bohemio | minimalista
@@ -997,15 +1022,27 @@ Tu misión: armar el outfit más inteligente posible usando EXACTAMENTE las pren
 REGLAS DE COMBINACIÓN
 ═══════════════════════════════════════
 
-1. ESTRUCTURA — selecciona EXACTAMENTE UNO por categoría:
-   • 1 parte superior (OBLIGATORIO)
-   • 1 parte inferior (OBLIGATORIO)
+1. ESTRUCTURA DEL OUTFIT — elige UNA de estas dos plantillas según el closet:
+
+   ── PLANTILLA A: CLÁSICO (sin vestido) ──
+   • 1 parte superior — camiseta, camisa, polo, blusa (OBLIGATORIO)
+   • 1 parte inferior — pantalón, jean, short, falda (OBLIGATORIO)
    • 1 calzado (OBLIGATORIO)
-   • 1 accesorio máximo (OPCIONAL — solo si suma al look)
-   • 1 abrigo (OBLIGATORIO si sensación < 18°C o lluvia ≥ 40%; OPCIONAL si hace calor)
-   ✗ NUNCA 2 prendas del mismo tipo en outfit_ids
+   • 1 abrigo — chaqueta, sudadera, blazer (OBLIGATORIO si sensación < 18°C o lluvia ≥ 40%; omitir si > 25°C)
+   • 1–2 accesorios — gorra, bandolera/bolso, reloj, manilla, collar, cinturón, lentes (si hay disponibles y suman)
+
+   ── PLANTILLA B: VESTIDO / JUMPSUIT / MONO ──
+   • 1 vestido / jumpsuit / mono completo (reemplaza parte superior + inferior — NUNCA añadir pantalón ni camiseta)
+   • 1 calzado (OBLIGATORIO)
+   • 1 abrigo (OBLIGATORIO si sensación < 18°C; OPCIONAL si templado; OMITIR si > 25°C)
+   • 1–2 accesorios (si hay disponibles y suman al look)
+
+   REGLAS GLOBALES:
+   ✗ NUNCA mezclar plantillas (vestido + pantalón = error grave)
+   ✗ NUNCA 2 prendas del mismo tipo (ej: 2 abrigos)
    ✗ Sudadera y chaqueta = mismo tipo (abrigo). Solo una.
-   ✗ Si no hay abrigo disponible y hace frío, díselo al usuario en la respuesta
+   ✓ Si no hay abrigo disponible y hace frío, díselo en la respuesta
+   ✓ Incluye accesorios siempre que existan en el closet y complementen el look
 
 2. TEORÍA DEL COLOR:
    • Neutros (negro, blanco, beige, gris, camel, marino) van con todo
