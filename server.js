@@ -571,24 +571,32 @@ app.post("/api/subir-prenda", requireAuth, aiLimiter, upload.single("imagen"), a
             {
               type: "text",
               text: `Eres un experto en moda y retail con visión detallada.
-Analiza esta prenda con mucho cuidado y devuelve SOLO este JSON:
+Analiza esta prenda con mucho cuidado y devuelve SOLO este JSON (sin texto extra):
 {
   "nombre": "tenis",
   "color": "café/marrón",
-  "tipo": "calzado"
+  "tipo": "calzado",
+  "material": "cuero sintético",
+  "temporada": "todo el año",
+  "estilo": "casual",
+  "patron": "liso",
+  "fit": "regular"
 }
-Reglas estrictas:
-- Para el color: sé muy específico (café, marrón, beige, crema, burdeos, mostaza, camel, terracota, verde oliva, azul marino, etc). NO uses colores genéricos.
-- Si hay varios colores menciona el principal: "negro con blanco".
-- Para el nombre: usa el término correcto (tenis, botines, mocasines, chaqueta, sudadera, hoodie, polo, blusa, etc).
-- Para el tipo: usa únicamente: calzado, parte superior, parte inferior, accesorio, abrigo.
-- Sudaderas, hoodies, chaquetas, chamarras, blazers, sacos → tipo SIEMPRE "abrigo".`,
+Reglas para cada campo:
+- color: muy específico (café, marrón, beige, crema, burdeos, mostaza, camel, terracota, verde oliva, azul marino). Principal si hay varios: "negro con blanco".
+- nombre: término correcto (tenis, botines, mocasines, chaqueta, sudadera, hoodie, polo, blusa, etc).
+- tipo: SOLO uno de: calzado, parte superior, parte inferior, accesorio, abrigo. Sudaderas/hoodies/chaquetas/blazers → abrigo.
+- material: algodón, poliéster, lino, denim, cuero, lana, seda, sintético, punto, etc.
+- temporada: verano, invierno, primavera/otoño, todo el año.
+- estilo: casual, formal, deportivo, elegante, streetwear, bohemio, minimalista, etc.
+- patron: liso, rayas, cuadros, floral, estampado, camuflaje, tie-dye, animal print, etc.
+- fit: slim, regular, oversized, ajustado, holgado, etc.`,
             },
             { type: "image_url", image_url: { url: imagenOriginalUrl, detail: "low" } },
           ],
         }],
         temperature: 0,
-        max_tokens: 200,
+        max_tokens: 300,
       });
 
       const parsed = safeParseJSON(ai.choices[0].message.content);
@@ -715,6 +723,110 @@ app.delete("/api/prendas/:id", requireAuth, async (req, res) => {
     res.json({ mensaje: "🗑️ Eliminado" });
   } catch (err) {
     console.error("🔥 delete:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ─────────────────────────────────────
+   🔄 RE-ANÁLISIS DE PRENDAS EXISTENTES
+   Enriquece metadata_ia con material, temporada, estilo, patrón, fit
+───────────────────────────────────── */
+app.post("/api/prendas/reanalizar", requireAuth, aiLimiter, async (req, res) => {
+  try {
+    const usuario_id = req.userId;
+    const { data: prendas, error } = await supabase
+      .from("prendas")
+      .select("id, imagen_url, descripcion, metadata_ia")
+      .eq("usuario_id", usuario_id)
+      .eq("tipo", "prenda");
+
+    if (error) throw error;
+    if (!prendas || prendas.length === 0)
+      return res.json({ mensaje: "No hay prendas para analizar.", actualizadas: 0 });
+
+    // Solo prendas que no tienen los campos nuevos
+    const pendientes = prendas.filter(p => {
+      const m = p.metadata_ia || {};
+      return !m.material || !m.temporada || !m.estilo || !m.patron || !m.fit;
+    });
+
+    if (pendientes.length === 0)
+      return res.json({ mensaje: "Todas las prendas ya tienen metadata completa.", actualizadas: 0 });
+
+    let actualizadas = 0;
+    const LOTE = 5; // de a 5 para no saturar la API
+
+    for (let i = 0; i < pendientes.length; i += LOTE) {
+      const lote = pendientes.slice(i, i + LOTE);
+      await Promise.allSettled(lote.map(async (prenda) => {
+        try {
+          const ai = await openai.chat.completions.create({
+            model: MODEL,
+            messages: [{
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: `Analiza esta prenda y devuelve SOLO este JSON:
+{
+  "nombre": "...",
+  "color": "...",
+  "tipo": "...",
+  "material": "...",
+  "temporada": "...",
+  "estilo": "...",
+  "patron": "...",
+  "fit": "..."
+}
+tipo: calzado | parte superior | parte inferior | accesorio | abrigo (sudaderas/hoodies/chaquetas → abrigo)
+material: algodón, denim, cuero, lana, lino, poliéster, punto, sintético, seda...
+temporada: verano | invierno | primavera/otoño | todo el año
+estilo: casual | formal | deportivo | streetwear | elegante | bohemio | minimalista
+patron: liso | rayas | cuadros | floral | estampado | camuflaje | animal print
+fit: slim | regular | oversized | ajustado | holgado`,
+                },
+                { type: "image_url", image_url: { url: prenda.imagen_url, detail: "low" } },
+              ],
+            }],
+            temperature: 0,
+            max_tokens: 300,
+          });
+
+          const parsed = safeParseJSON(ai.choices[0].message.content);
+          if (!parsed) return;
+
+          const metaActual = prenda.metadata_ia || {};
+          const metaNueva = {
+            nombre:    parsed.nombre    || metaActual.nombre    || "",
+            color:     parsed.color     || metaActual.color     || "",
+            tipo:      parsed.tipo      || metaActual.tipo      || "",
+            material:  parsed.material  || metaActual.material  || "",
+            temporada: parsed.temporada || metaActual.temporada || "",
+            estilo:    parsed.estilo    || metaActual.estilo    || "",
+            patron:    parsed.patron    || metaActual.patron    || "",
+            fit:       parsed.fit       || metaActual.fit       || "",
+          };
+
+          const nombre = metaNueva.nombre || prenda.descripcion.split(" (")[0];
+          const color  = metaNueva.color  || prenda.descripcion.match(/\(([^)]+)\)/)?.[1] || "?";
+          const tipo   = metaNueva.tipo   || prenda.descripcion.split(" - ").pop() || "?";
+
+          await supabase.from("prendas").update({
+            metadata_ia: metaNueva,
+            descripcion: `${nombre} (${color}) - ${tipo}`,
+          }).eq("id", prenda.id);
+
+          actualizadas++;
+        } catch (e) {
+          console.error(`🔥 reanalizar prenda ${prenda.id}:`, e.message);
+        }
+      }));
+    }
+
+    invalidatePrendasCache(usuario_id);
+    res.json({ mensaje: `✅ ${actualizadas} de ${pendientes.length} prendas actualizadas.`, actualizadas, total: pendientes.length });
+  } catch (err) {
+    console.error("🔥 reanalizar:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
