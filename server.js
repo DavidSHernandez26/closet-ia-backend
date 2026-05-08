@@ -612,11 +612,11 @@ app.post("/api/subir-prenda", requireAuth, aiLimiter, upload.single("imagen"), a
             {
               type: "text",
               text: `Eres un experto en moda y retail con visión detallada.
-Primero determina si la imagen contiene una prenda de ropa, calzado o accesorio de moda.
-Si NO es una prenda (por ejemplo: persona, paisaje, comida, animal, objeto, etc.), devuelve SOLO:
-{"tipo":"no_prenda"}
+Analiza la imagen. Considera prenda válida cualquier ropa, calzado o accesorio de moda, tanto si aparece sola como si la lleva puesta una persona.
+Solo devuelve {"tipo":"no_prenda"} si la imagen claramente NO tiene ninguna prenda: por ejemplo una foto de comida, paisaje, animal o texto.
+En caso de duda, analiza la prenda más visible.
 
-Si SÍ es una prenda, devuelve SOLO este JSON (sin texto extra):
+Devuelve SOLO este JSON (sin texto extra):
 {
   "nombre": "tenis",
   "color": "café/marrón",
