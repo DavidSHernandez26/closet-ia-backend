@@ -22,13 +22,17 @@ app.use(helmet({
 const _corsOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(",").map(o => o.trim())
   : [];
+// Orígenes de la app nativa (Capacitor Android / iOS WebView)
+const _nativeOrigins = ["https://localhost", "http://localhost", "capacitor://localhost"];
 app.use(cors({
   origin: (origin, cb) => {
     // Sin lista configurada → permitir todo
     if (_corsOrigins.length === 0) return cb(null, true);
-    // Sin origin (curl, apps nativas) → permitir
+    // Sin origin (curl, Postman) → permitir
     if (!origin) return cb(null, true);
-    // Verificar si el origin está en la lista
+    // App nativa Capacitor → siempre permitir
+    if (_nativeOrigins.includes(origin)) return cb(null, true);
+    // Verificar si el origin está en la lista de producción
     _corsOrigins.includes(origin) ? cb(null, true) : cb(new Error("CORS no permitido"));
   },
   methods: ["GET", "POST", "PUT", "DELETE"],
