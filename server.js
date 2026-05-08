@@ -19,8 +19,18 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
   contentSecurityPolicy: false,
 }));
+const _corsOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(",").map(o => o.trim())
+  : [];
 app.use(cors({
-  origin: process.env.CORS_ORIGIN,
+  origin: (origin, cb) => {
+    // Sin lista configurada → permitir todo
+    if (_corsOrigins.length === 0) return cb(null, true);
+    // Sin origin (curl, apps nativas) → permitir
+    if (!origin) return cb(null, true);
+    // Verificar si el origin está en la lista
+    _corsOrigins.includes(origin) ? cb(null, true) : cb(new Error("CORS no permitido"));
+  },
   methods: ["GET", "POST", "PUT", "DELETE"],
   allowedHeaders: ["Content-Type", "Authorization"],
 }));
