@@ -20,7 +20,7 @@ app.use(helmet({
   contentSecurityPolicy: false,
 }));
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || "*",
+  origin: process.env.CORS_ORIGIN,
   methods: ["GET", "POST", "PUT", "DELETE"],
   allowedHeaders: ["Content-Type", "Authorization"],
 }));
@@ -35,7 +35,20 @@ const aiLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-const upload = multer({ dest: "uploads/", limits: { fileSize: 10 * 1024 * 1024 } });
+const ALLOWED_MIMES = new Set(["image/jpeg","image/jpg","image/png","image/webp","image/gif","image/heic","image/heif"]);
+const upload = multer({
+  dest: "uploads/",
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    ALLOWED_MIMES.has(file.mimetype)
+      ? cb(null, true)
+      : cb(Object.assign(new Error("Tipo de archivo no permitido"), { status: 415 }));
+  },
+});
+
+async function cleanupFile(path) {
+  if (path) fs.unlink(path, () => {});
+}
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -378,10 +391,10 @@ app.put("/api/perfil", requireAuth, async (req, res) => {
   }
 });
 
-app.post("/api/perfil/avatar", upload.single("avatar"), async (req, res) => {
+app.post("/api/perfil/avatar", requireAuth, upload.single("avatar"), async (req, res) => {
   try {
-    const { usuario_id } = req.body;
-    if (!usuario_id || !req.file) return res.status(400).json({ error: "Faltan datos" });
+    const usuario_id = req.userId;
+    if (!req.file) return res.status(400).json({ error: "Falta imagen" });
 
     const buffer = await fs.promises.readFile(req.file.path);
     const fileName = `avatars/${usuario_id}_${Date.now()}.jpg`;
@@ -474,10 +487,9 @@ app.put("/api/amistad/responder", requireAuth, async (req, res) => {
   }
 });
 
-app.get("/api/amistad/solicitudes", async (req, res) => {
+app.get("/api/amistad/solicitudes", requireAuth, async (req, res) => {
   try {
-    const { usuario_id } = req.query;
-    if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
+    const usuario_id = req.userId;
     const { data, error } = await supabase
       .from("friendships")
       .select(`id, status, created_at, requester:requester_id(id, username, nombre, avatar_url)`)
@@ -490,10 +502,9 @@ app.get("/api/amistad/solicitudes", async (req, res) => {
   }
 });
 
-app.get("/api/amistad/amigos", async (req, res) => {
+app.get("/api/amistad/amigos", requireAuth, async (req, res) => {
   try {
-    const { usuario_id } = req.query;
-    if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
+    const usuario_id = req.query.usuario_id || req.userId;
     const { data, error } = await supabase
       .from("friendships")
       .select(`id, requester:requester_id(id, username, nombre, avatar_url), addressee:addressee_id(id, username, nombre, avatar_url)`)
@@ -1541,15 +1552,12 @@ app.delete("/api/wishlist/:id", requireAuth, async (req, res) => {
 /* ─────────────────────────────────────
    🔔 NOTIFICACIONES
 ───────────────────────────────────── */
-app.get("/api/notificaciones/count", async (req, res) => {
+app.get("/api/notificaciones/count", requireAuth, async (req, res) => {
   try {
-    const { usuario_id } = req.query;
-    if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
-
     const { count, error } = await supabase
       .from("notifications")
       .select("*", { count: "exact", head: true })
-      .eq("usuario_id", usuario_id)
+      .eq("usuario_id", req.userId)
       .eq("leida", false);
 
     if (error) throw error;
@@ -1560,18 +1568,15 @@ app.get("/api/notificaciones/count", async (req, res) => {
   }
 });
 
-app.get("/api/notificaciones", async (req, res) => {
+app.get("/api/notificaciones", requireAuth, async (req, res) => {
   try {
-    const { usuario_id } = req.query;
-    if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
-
     const { data, error } = await supabase
       .from("notifications")
       .select(`
         id, tipo, mensaje, leida, created_at, post_id,
         from_profile:from_user_id(id, username, nombre, avatar_url)
       `)
-      .eq("usuario_id", usuario_id)
+      .eq("usuario_id", req.userId)
       .order("created_at", { ascending: false })
       .limit(30);
 
@@ -1599,9 +1604,12 @@ app.put("/api/notificaciones/leer", requireAuth, async (req, res) => {
   }
 });
 
-app.delete("/api/notificaciones/:id", async (req, res) => {
+app.delete("/api/notificaciones/:id", requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
+    const { data: notif } = await supabase.from("notifications").select("usuario_id").eq("id", id).single();
+    if (!notif) return res.status(404).json({ error: "No encontrada" });
+    if (notif.usuario_id !== req.userId) return res.status(403).json({ error: "Sin permiso" });
     const { error } = await supabase.from("notifications").delete().eq("id", id);
     if (error) throw error;
     res.json({ ok: true });
@@ -1611,15 +1619,12 @@ app.delete("/api/notificaciones/:id", async (req, res) => {
   }
 });
 
-app.delete("/api/notificaciones", async (req, res) => {
+app.delete("/api/notificaciones", requireAuth, async (req, res) => {
   try {
-    const { usuario_id } = req.query;
-    if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
-
     const { error } = await supabase
       .from("notifications")
       .delete()
-      .eq("usuario_id", usuario_id);
+      .eq("usuario_id", req.userId);
 
     if (error) throw error;
     res.json({ ok: true });
@@ -1632,10 +1637,10 @@ app.delete("/api/notificaciones", async (req, res) => {
 /* ─────────────────────────────────────
    📅 CALENDARIO
 ───────────────────────────────────── */
-app.get("/api/calendario", async (req, res) => {
+app.get("/api/calendario", requireAuth, async (req, res) => {
   try {
-    const { usuario_id, year, month } = req.query;
-    if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
+    const { year, month } = req.query;
+    const usuario_id = req.userId;
 
     let query = supabase
       .from("calendar_outfits")
