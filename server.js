@@ -267,7 +267,7 @@ function safeParseJSON(content) {
 ───────────────────────────────────── */
 async function descargarImagen(url) {
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
     if (!res.ok) throw new Error(`Status ${res.status}`);
     const buffer = Buffer.from(await res.arrayBuffer());
     return buffer;
@@ -301,6 +301,7 @@ async function removeBackground(imageBuffer, model = "birefnet-general") {
 
     const res = await fetch(`${rembgUrl}/remove-bg`, {
       method: "POST",
+      signal: AbortSignal.timeout(90000),
       headers: {
         "x-rembg-secret": process.env.REMBG_SECRET || "",
         ...formData.getHeaders(),
@@ -623,11 +624,11 @@ app.delete("/api/amistad/:id", requireAuth, async (req, res) => {
   }
 });
 
-app.get("/api/prendas/amigo/:amigo_id", async (req, res) => {
+app.get("/api/prendas/amigo/:amigo_id", requireAuth, async (req, res) => {
   try {
     const { amigo_id } = req.params;
-    const { usuario_id, tipo } = req.query;
-    if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
+    const usuario_id = req.userId;
+    const { tipo } = req.query;
 
     const { data: amistad } = await supabase
       .from("friendships").select("id")
@@ -722,7 +723,7 @@ Reglas para cada campo:
         max_tokens: 300,
       });
 
-      const parsed = safeParseJSON(ai.choices[0].message.content);
+      const parsed = safeParseJSON(ai?.choices?.[0]?.message?.content);
 
       // Si la IA detecta que no es una prenda, eliminar de storage y rechazar
       if (parsed?.tipo === "no_prenda") {
@@ -782,7 +783,7 @@ Reglas: colores específicos, nombres correctos, tipos: calzado/parte superior/p
         max_tokens: 800,
       });
 
-      const parsed = safeParseJSON(ai.choices[0].message.content);
+      const parsed = safeParseJSON(ai?.choices?.[0]?.message?.content);
       const prendasDetectadas = parsed?.prendas || [];
       const descripcionOutfit = parsed?.descripcion_outfit || "Outfit completo";
 
@@ -922,7 +923,7 @@ fit: slim | regular | oversized | ajustado | holgado`,
             max_tokens: 300,
           });
 
-          const parsed = safeParseJSON(ai.choices[0].message.content);
+          const parsed = safeParseJSON(ai?.choices?.[0]?.message?.content);
           if (!parsed) return;
 
           const metaActual = prenda.metadata_ia || {};
