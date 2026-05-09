@@ -71,15 +71,69 @@ const supabase = createClient(
 
 const MODEL = "gpt-4o-mini";
 
+function getSupabaseProjectRef(value) {
+  if (!value) return null;
+  try {
+    const host = new URL(value).hostname;
+    return host.endsWith(".supabase.co") ? host.split(".")[0] : null;
+  } catch {
+    return null;
+  }
+}
+
+function decodeJwtPayload(token) {
+  try {
+    const payload = token.split(".")[1];
+    if (!payload) return null;
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+    return JSON.parse(Buffer.from(normalized, "base64").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function getAuthDebug(token) {
+  const payload = decodeJwtPayload(token);
+  return {
+    backendProject: getSupabaseProjectRef(process.env.SUPABASE_URL),
+    tokenProject: getSupabaseProjectRef(payload?.iss),
+    tokenAud: payload?.aud || null,
+    tokenExp: payload?.exp ? new Date(payload.exp * 1000).toISOString() : null,
+  };
+}
+
+app.get("/api/debug/auth-config", (_req, res) => {
+  res.json({
+    backendProject: getSupabaseProjectRef(process.env.SUPABASE_URL),
+    hasSupabaseUrl: Boolean(process.env.SUPABASE_URL),
+    hasServiceKey: Boolean(process.env.SUPABASE_SERVICE_KEY),
+    serviceKeyLength: process.env.SUPABASE_SERVICE_KEY?.length || 0,
+  });
+});
+
 /* ─────────────────────────────────────
    🔐 AUTH MIDDLEWARE (Fix 2)
    Verifica el JWT de Supabase y adjunta req.userId
 ───────────────────────────────────── */
 async function requireAuth(req, res, next) {
-  const token = req.headers.authorization?.replace("Bearer ", "");
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
   if (!token) return res.status(401).json({ error: "No autenticado" });
+
   const { data: { user }, error } = await supabase.auth.getUser(token);
-  if (error || !user) return res.status(401).json({ error: "Token inválido" });
+  if (error || !user) {
+    const debug = getAuthDebug(token);
+    console.warn("[auth] Token rechazado", {
+      ...debug,
+      reason: error?.message || "Usuario no encontrado",
+    });
+    return res.status(401).json({
+      error: "Token inválido",
+      code: "AUTH_TOKEN_INVALID",
+      details: debug,
+    });
+  }
+
   req.userId = user.id;
   next();
 }
