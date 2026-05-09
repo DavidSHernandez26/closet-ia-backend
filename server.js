@@ -106,14 +106,6 @@ function getAuthDebug(token) {
   };
 }
 
-app.get("/api/debug/auth-config", (_req, res) => {
-  res.json({
-    backendProject: getSupabaseProjectRef(process.env.SUPABASE_URL),
-    hasSupabaseUrl: Boolean(process.env.SUPABASE_URL),
-    hasServiceKey: Boolean(process.env.SUPABASE_SERVICE_KEY),
-    serviceKeyLength: process.env.SUPABASE_SERVICE_KEY?.length || 0,
-  });
-});
 
 /* ─────────────────────────────────────
    🔐 AUTH MIDDLEWARE (Fix 2)
