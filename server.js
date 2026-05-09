@@ -69,7 +69,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
-const MODEL = "gpt-5.4-mini";
+const MODEL = "gpt-4o-mini";
 
 /* ─────────────────────────────────────
    🔐 AUTH MIDDLEWARE (Fix 2)
