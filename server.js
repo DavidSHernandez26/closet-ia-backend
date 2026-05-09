@@ -340,12 +340,10 @@ async function crearNotificacion({ usuario_id, from_usuario_id, tipo, mensaje, p
 /* ─────────────────────────────────────
    👤 PERFIL
 ───────────────────────────────────── */
-app.get("/api/perfil/me", async (req, res) => {
+app.get("/api/perfil/me", requireAuth, async (req, res) => {
   try {
-    const { usuario_id } = req.query;
-    if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
     const { data, error } = await supabase
-      .from("profiles").select("*").eq("id", usuario_id).single();
+      .from("profiles").select("*").eq("id", req.userId).single();
     if (error) throw error;
     res.json(data);
   } catch (err) {
@@ -573,7 +571,7 @@ app.get("/api/amistad/solicitudes", requireAuth, async (req, res) => {
 
 app.get("/api/amistad/amigos", requireAuth, async (req, res) => {
   try {
-    const usuario_id = req.query.usuario_id || req.userId;
+    const usuario_id = req.userId;
     const { data, error } = await supabase
       .from("friendships")
       .select(`id, requester:requester_id(id, username, nombre, avatar_url), addressee:addressee_id(id, username, nombre, avatar_url)`)
@@ -1252,7 +1250,7 @@ Devuelve SIEMPRE y ÚNICAMENTE este JSON (sin texto antes ni después):
       temperature: 0.7,
     });
 
-    const parsed = safeParseJSON(ai.choices[0].message.content);
+    const parsed = safeParseJSON(ai?.choices?.[0]?.message?.content);
 
     if (!parsed) {
       const fallback = deduplicarPorTipo([...prendasSueltas].sort(() => Math.random() - 0.5));
@@ -1320,7 +1318,7 @@ app.post("/api/recomendaciones-compra", requireAuth, async (req, res) => {
       temperature: 0.7,
       max_tokens: 150,
     });
-    const parsed = safeParseJSON(ai.choices[0].message.content);
+    const parsed = safeParseJSON(ai?.choices?.[0]?.message?.content);
     res.json({ recomendaciones: parsed?.recomendaciones || [] });
   } catch (err) {
     console.error("📊 recomendaciones:", err.message);
