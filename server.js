@@ -22,16 +22,20 @@ app.use(helmet({
 const _corsOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(",").map(o => o.trim())
   : [];
-// Orígenes de la app nativa (Capacitor Android / iOS WebView)
-const _nativeOrigins = ["https://localhost", "http://localhost", "capacitor://localhost"];
+// Orígenes siempre permitidos: app nativa y despliegues conocidos
+const _alwaysAllowed = [
+  "https://localhost", "http://localhost", "capacitor://localhost",
+  "https://beconfident.site",
+  "https://closet-ia-frontend.vercel.app",
+];
 app.use(cors({
   origin: (origin, cb) => {
-    // Sin lista configurada → permitir todo
-    if (_corsOrigins.length === 0) return cb(null, true);
     // Sin origin (curl, Postman) → permitir
     if (!origin) return cb(null, true);
-    // App nativa Capacitor → siempre permitir
-    if (_nativeOrigins.includes(origin)) return cb(null, true);
+    // Orígenes siempre permitidos
+    if (_alwaysAllowed.includes(origin)) return cb(null, true);
+    // Sin lista configurada → permitir todo
+    if (_corsOrigins.length === 0) return cb(null, true);
     // Verificar si el origin está en la lista de producción
     _corsOrigins.includes(origin) ? cb(null, true) : cb(new Error("CORS no permitido"));
   },
