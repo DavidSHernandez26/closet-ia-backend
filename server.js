@@ -263,11 +263,9 @@ function safeParseJSON(content) {
 ───────────────────────────────────── */
 async function descargarImagen(url) {
   try {
-    console.log("📥 Descargando imagen:", url);
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Status ${res.status}`);
     const buffer = Buffer.from(await res.arrayBuffer());
-    console.log("📥 Buffer size:", buffer.length, "bytes");
     return buffer;
   } catch (err) {
     console.error("⚠️ Error descargando imagen:", err.message);
@@ -293,7 +291,6 @@ async function removeBackground(imageBuffer, model = "birefnet-general") {
       .jpeg({ quality: 85 })
       .toBuffer();
 
-    console.log(`🧼 Enviando a HF Space (${model}), buffer reducido:`, resizedBuffer.length);
     const formData = new FormData();
     formData.append("file", resizedBuffer, { filename: "prenda.jpg", contentType: "image/jpeg" });
     formData.append("model", model);
@@ -314,7 +311,6 @@ async function removeBackground(imageBuffer, model = "birefnet-general") {
     }
 
     const buffer = Buffer.from(await res.arrayBuffer());
-    console.log(`🧼 Fondo removido OK (${model}), resultado:`, buffer.length, "bytes");
     return buffer;
   } catch (err) {
     console.error("⚠️ removeBackground excepción:", err.message);
@@ -660,7 +656,6 @@ app.post("/api/subir-prenda", requireAuth, aiLimiter, upload.single("imagen"), a
 
     if (req.file) {
       imagenOriginalBuffer = await fs.promises.readFile(req.file.path);
-      console.log("📁 Archivo recibido directo, size:", imagenOriginalBuffer.length);
     } else {
       imagenOriginalBuffer = await descargarImagen(imagenOriginalUrl);
       if (!imagenOriginalBuffer) throw new Error("No se pudo descargar la imagen");
@@ -669,11 +664,9 @@ app.post("/api/subir-prenda", requireAuth, aiLimiter, upload.single("imagen"), a
     imagenOriginalBuffer = await sharp(imagenOriginalBuffer).rotate().toBuffer();
 
     if (tipo === "prenda") {
-      console.log("👕 Modo: prenda individual — quitando fondo con isnet-general-use...");
       const sinFondo = await removeBackground(imagenOriginalBuffer, "isnet-general-use");
       const bufferFinal = sinFondo || imagenOriginalBuffer;
       const tieneFondo = !sinFondo;
-      if (tieneFondo) console.log("⚠️ rembg falló, usando imagen original");
 
       const cleanName = `${usuario_id}_${Date.now()}_prenda.png`;
       const { error: uploadError } = await supabase.storage
@@ -681,7 +674,6 @@ app.post("/api/subir-prenda", requireAuth, aiLimiter, upload.single("imagen"), a
       if (uploadError) throw uploadError;
 
       imagenOriginalUrl = supabase.storage.from("prendas").getPublicUrl(cleanName).data.publicUrl;
-      console.log("📤 Imagen subida:", imagenOriginalUrl);
 
       const ai = await openai.chat.completions.create({
         model: MODEL,
@@ -738,7 +730,6 @@ Reglas para cada campo:
       const color = parsed?.color || "?";
       const tipoPrenda = parsed?.tipo || "?";
       const descripcion = `${nombre} (${color}) - ${tipoPrenda}`;
-      console.log("👕 Detectado:", descripcion);
 
       await supabase.from("prendas").insert([{
         usuario_id, tipo: "prenda", genero,
@@ -755,7 +746,6 @@ Reglas para cada campo:
     }
 
     if (tipo === "outfit") {
-      console.log("🧥 Modo: outfit completo");
       const outfitName = `${usuario_id}_${Date.now()}_outfit.jpg`;
       const { error: uploadError } = await supabase.storage
         .from("prendas").upload(outfitName, imagenOriginalBuffer, { contentType: "image/jpeg" });
@@ -791,7 +781,6 @@ Reglas: colores específicos, nombres correctos, tipos: calzado/parte superior/p
       const parsed = safeParseJSON(ai.choices[0].message.content);
       const prendasDetectadas = parsed?.prendas || [];
       const descripcionOutfit = parsed?.descripcion_outfit || "Outfit completo";
-      console.log("🧥 Prendas detectadas:", prendasDetectadas.length);
 
       await supabase.from("prendas").insert([{
         usuario_id, tipo: "outfit", genero,
