@@ -1064,10 +1064,10 @@ app.post("/api/fashion", requireAuth, aiLimiter, async (req, res) => {
         }).join("\n")
       : "";
 
-    /* ── Contexto 3: Outfit actual en pantalla ── */
+    /* ── Contexto 3: Outfit actual en pantalla — se debe EVITAR repetir ── */
     const prendasActuales = prendasSueltas.filter((p) => outfit_ids_anteriores.includes(p.id));
     const contextoActual = prendasActuales.length > 0
-      ? "\n\nOUTFIT ACTUAL EN PANTALLA:\n" +
+      ? "\n\nOUTFIT YA MOSTRADO AL USUARIO (EVITAR REPETIR — usa prendas distintas):\n" +
         prendasActuales.map(formatPrendaRica).join("\n\n")
       : "";
 
@@ -1105,10 +1105,10 @@ app.post("/api/fashion", requireAuth, aiLimiter, async (req, res) => {
     /* ── Contexto 7: Clima ── */
     const contextoClima = generarContextoClima(clima);
 
-    /* ── Aviso de prendas usadas recientemente ── */
-    const prendas_usadas_ids = [...IDS_RECIENTES];
+    /* ── Exclusión explícita: outfit actual + usados en calendario ── */
+    const prendas_usadas_ids = [...new Set([...IDS_RECIENTES, ...outfit_ids_anteriores])];
     const avisoRepeticion = prendas_usadas_ids.length > 0
-      ? `\n\nADVERTENCIA DE REPETICIÓN: Los IDs [${prendas_usadas_ids.join(", ")}] fueron usados en los últimos 14 días. Prioriza prendas que NO estén en esa lista para generar variedad real.`
+      ? `\n\nEXCLUSIÓN OBLIGATORIA: Los IDs [${prendas_usadas_ids.join(", ")}] NO pueden aparecer en el outfit_ids de tu respuesta. El usuario ya los vio — DEBES elegir prendas completamente diferentes para generar variedad real.`
       : "";
 
     const ai = await openai.chat.completions.create({
