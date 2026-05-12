@@ -1007,6 +1007,13 @@ function formatPrendaRica(p) {
   return partes.join("\n");
 }
 
+async function registrarRachaHoy(usuario_id) {
+  try {
+    const hoy = new Date().toISOString().split("T")[0];
+    await supabase.from("calendario").insert({ usuario_id, fecha: hoy });
+  } catch { /* duplicado o error — la racha deduplica por Set */ }
+}
+
 app.post("/api/fashion", requireAuth, aiLimiter, async (req, res) => {
   try {
     const usuario_id = req.userId;
@@ -1252,6 +1259,7 @@ Devuelve SIEMPRE y ÚNICAMENTE este JSON (sin texto antes ni después):
 
     if (!parsed) {
       const fallback = deduplicarPorTipo([...prendasSueltas].sort(() => Math.random() - 0.5));
+      registrarRachaHoy(usuario_id);
       return res.json({
         respuesta: "Te armé una combinación con lo que tienes disponible. ¡Pruébala y dime qué piensas!",
         outfit: fallback, outfit_guardado: null, cambiar_panel: true,
@@ -1262,6 +1270,7 @@ Devuelve SIEMPRE y ÚNICAMENTE este JSON (sin texto antes ni después):
     const outfitGuardadoRecomendado = outfitsGuardados.find((p) => parsed.outfit_ids?.includes(p.id));
 
     if (outfitGuardadoRecomendado) {
+      if (cambiarPanel) registrarRachaHoy(usuario_id);
       return res.json({
         respuesta: parsed.respuesta,
         outfit: [], outfit_guardado: outfitGuardadoRecomendado, cambiar_panel: cambiarPanel,
@@ -1272,6 +1281,7 @@ Devuelve SIEMPRE y ÚNICAMENTE este JSON (sin texto antes ni después):
     const outfit = deduplicarPorTipo(outfitBruto);
     const fallback = deduplicarPorTipo([...prendasSueltas].sort(() => Math.random() - 0.5));
 
+    if (cambiarPanel) registrarRachaHoy(usuario_id);
     res.json({
       respuesta: parsed.respuesta || "Aquí tienes un outfit que combina muy bien.",
       outfit: outfit.length ? outfit : fallback,
