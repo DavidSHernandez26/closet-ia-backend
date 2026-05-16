@@ -1014,6 +1014,241 @@ async function registrarRachaHoy(usuario_id) {
   } catch { /* duplicado o error — la racha deduplica por Set */ }
 }
 
+/* ─────────────────────────────────────
+   🌊 FASHION STREAMING — SSE typewriter
+───────────────────────────────────────── */
+app.post("/api/fashion/stream", requireAuth, aiLimiter, async (req, res) => {
+  try {
+    const usuario_id = req.userId;
+    const { mensaje, historial = [], outfit_ids_anteriores = [], clima } = req.body;
+    if (!mensaje) return res.status(400).json({ error: "Faltan datos" });
+    if (!Array.isArray(historial) || !Array.isArray(outfit_ids_anteriores))
+      return res.status(400).json({ error: "Formato inválido" });
+
+    /* ── Carga en paralelo ── */
+    let prendas = getCachedPrendas(usuario_id);
+    const [prendasResult, perfilResult, calendarioResult] = await Promise.allSettled([
+      prendas
+        ? Promise.resolve({ data: prendas })
+        : supabase.from("prendas").select("*").eq("usuario_id", usuario_id).order("created_at", { ascending: false }),
+      supabase.from("profiles").select("nombre, bio, genero").eq("id", usuario_id).single(),
+      supabase.from("calendario")
+        .select("fecha, descripcion, metadata")
+        .eq("usuario_id", usuario_id)
+        .gte("fecha", (() => { const d = new Date(); d.setDate(d.getDate() - 14); return d.toISOString().split("T")[0]; })())
+        .order("fecha", { ascending: false })
+        .limit(10),
+    ]);
+
+    if (!prendas) {
+      prendas = prendasResult.status === "fulfilled" ? (prendasResult.value.data || []) : [];
+      if (prendas.length) setCachedPrendas(usuario_id, prendas);
+    }
+
+    const perfil = perfilResult.status === "fulfilled" ? perfilResult.value.data : null;
+    const calendarioReciente = calendarioResult.status === "fulfilled" ? (calendarioResult.value.data || []) : [];
+
+    if (!prendas || prendas.length === 0) {
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.setHeader("X-Accel-Buffering", "no");
+      res.flushHeaders();
+      res.write(`data: ${JSON.stringify({ type: "text", chunk: "No tienes prendas registradas aún. ¡Sube algunas fotos de tu closet para que pueda ayudarte!" })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: "done", outfit: [], outfit_guardado: null, cambiar_panel: false, sugerencias: [] })}\n\n`);
+      res.write("data: [DONE]\n\n");
+      return res.end();
+    }
+
+    const prendasSueltas = prendas.filter((p) => p.tipo === "prenda");
+    const outfitsGuardados = prendas.filter((p) => p.tipo === "outfit");
+
+    const contextoPrendas = prendasSueltas.length > 0
+      ? "PRENDAS DISPONIBLES EN EL CLOSET:\n" + prendasSueltas.map(formatPrendaRica).join("\n\n")
+      : "No hay prendas sueltas disponibles.";
+
+    const contextoOutfits = outfitsGuardados.length > 0
+      ? "\n\nOUTFITS GUARDADOS (referencia de estilo del usuario):\n" +
+        outfitsGuardados.map((p) => {
+          const lista = p.metadata_ia?.prendas?.map((x) => `${x.nombre} (${x.color})`).join(", ") || "";
+          return `[ID:${p.id}] ${p.descripcion}${lista ? ` — incluye: ${lista}` : ""}`;
+        }).join("\n")
+      : "";
+
+    const prendasActuales = prendasSueltas.filter((p) => outfit_ids_anteriores.includes(p.id));
+    const contextoActual = prendasActuales.length > 0
+      ? "\n\nOUTFIT YA MOSTRADO AL USUARIO (EVITAR REPETIR):\n" + prendasActuales.map(formatPrendaRica).join("\n\n")
+      : "";
+
+    const IDS_RECIENTES = new Set();
+    const contextoCalendario = calendarioReciente.length > 0
+      ? "\n\nOUTFITS USADOS RECIENTEMENTE (últimos 14 días — EVITA repetir):\n" +
+        calendarioReciente.map((e) => {
+          const ids = e.metadata?.outfit_ids || [];
+          ids.forEach(id => IDS_RECIENTES.add(id));
+          const prendNames = ids.length
+            ? prendasSueltas.filter(p => ids.includes(p.id)).map(p => p.descripcion.split(" - ")[0]).join(", ")
+            : e.descripcion || "outfit sin detalle";
+          return `• ${e.fecha}: ${prendNames}`;
+        }).join("\n")
+      : "";
+
+    const contextoPerfil = perfil
+      ? (() => {
+          const partes = [];
+          if (perfil.nombre)  partes.push(`Nombre: ${perfil.nombre}`);
+          if (perfil.genero)  partes.push(`Género: ${perfil.genero}`);
+          if (perfil.bio)     partes.push(`Bio/Estilo personal: "${perfil.bio}"`);
+          return partes.length ? `\n\nPERFIL DEL USUARIO:\n${partes.join("\n")}` : "";
+        })()
+      : "";
+
+    const historialTexto = historial.length > 0
+      ? "\n\nHISTORIAL DE CONVERSACIÓN:\n" +
+        historial.map((h) => `${h.role === "user" ? "Usuario" : "Asistente"}: ${h.text}`).join("\n")
+      : "";
+
+    const contextoClima = generarContextoClima(clima);
+
+    const prendas_usadas_ids = [...new Set([...IDS_RECIENTES, ...outfit_ids_anteriores])];
+    const avisoRepeticion = prendas_usadas_ids.length > 0
+      ? `\n\nEXCLUSIÓN OBLIGATORIA: Los IDs [${prendas_usadas_ids.join(", ")}] NO pueden aparecer en outfit_ids.`
+      : "";
+
+    /* ── SSE headers ── */
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+
+    /* ── Cancelar si el cliente desconecta ── */
+    let clientGone = false;
+    req.on("close", () => { clientGone = true; });
+
+    /* ── OpenAI streaming ── */
+    const stream = await openai.chat.completions.create({
+      model: MODEL,
+      messages: [
+        {
+          role: "system",
+          content: `Eres un estilista personal experto con conocimiento profundo de teoría del color, tendencias actuales y psicología de la moda.
+
+Tu misión: armar el outfit más inteligente posible usando EXACTAMENTE las prendas del closet del usuario.
+
+[Ver reglas completas en /api/fashion — mismas reglas aplican aquí]
+
+Devuelve SIEMPRE y ÚNICAMENTE este JSON (sin texto antes ni después):
+{"respuesta":"[respuesta con formato: apertura + bullets + tip]","outfit_ids":[id1,id2,id3],"cambiar_panel":true,"sugerencias":["frase corta 1","frase corta 2"]}
+
+Reglas para "sugerencias": 2-3 respuestas rápidas específicas para el outfit que acabas de recomendar, máximo 40 chars cada una. Ej: "¿Cambio el calzado?", "Algo más formal", "¿Sin chaqueta?", "Opción más casual". NO incluyas "Guardar en calendario".
+
+Tono: cercano, seguro, como un amigo con buen gusto. Responde en español.`,
+        },
+        {
+          role: "user",
+          content: `${contextoPerfil}${contextoClima}${contextoPrendas}${contextoOutfits}${contextoActual}${contextoCalendario}${avisoRepeticion}${historialTexto}\n\nMensaje del usuario: ${mensaje}`,
+        },
+      ],
+      max_tokens: 900,
+      temperature: 0.7,
+      stream: true,
+    });
+
+    /* ── State machine: extrae "respuesta" mientras acumula el JSON completo ── */
+    const MARKER = '"respuesta":"';
+    let state = "BEFORE_TEXT"; // BEFORE_TEXT | IN_TEXT | AFTER_TEXT
+    let markerBuf = "";
+    let fullAccumulated = "";
+
+    for await (const chunk of stream) {
+      if (clientGone) break;
+      const rawPiece = chunk.choices[0]?.delta?.content ?? "";
+      if (!rawPiece) continue;
+      fullAccumulated += rawPiece;
+
+      if (state === "AFTER_TEXT") continue;
+
+      let toProcess = rawPiece;
+
+      if (state === "BEFORE_TEXT") {
+        markerBuf += rawPiece;
+        const idx = markerBuf.indexOf(MARKER);
+        if (idx === -1) {
+          if (markerBuf.length > MARKER.length) markerBuf = markerBuf.slice(-MARKER.length);
+          continue;
+        }
+        toProcess = markerBuf.slice(idx + MARKER.length);
+        markerBuf = "";
+        state = "IN_TEXT";
+      }
+
+      // Extrae texto del campo respuesta, respetando escapes JSON
+      let text = "";
+      let i = 0;
+      while (i < toProcess.length) {
+        const ch = toProcess[i];
+        if (ch === "\\" && i + 1 < toProcess.length) {
+          const esc = toProcess[i + 1];
+          if (esc === "n") text += "\n";
+          else if (esc === '"') text += '"';
+          else if (esc === "t") text += "\t";
+          else if (esc === "\\") text += "\\";
+          else text += esc;
+          i += 2;
+        } else if (ch === '"') {
+          state = "AFTER_TEXT";
+          break;
+        } else {
+          text += ch;
+          i++;
+        }
+      }
+
+      if (text && !clientGone) {
+        res.write(`data: ${JSON.stringify({ type: "text", chunk: text })}\n\n`);
+      }
+    }
+
+    if (clientGone) return res.end();
+
+    /* ── Parsear JSON completo y enviar evento final ── */
+    const parsed = safeParseJSON(fullAccumulated);
+    const sugerencias = Array.isArray(parsed?.sugerencias) ? parsed.sugerencias.slice(0, 3) : [];
+
+    if (!parsed) {
+      const fallback = deduplicarPorTipo([...prendasSueltas].sort(() => Math.random() - 0.5));
+      registrarRachaHoy(usuario_id);
+      res.write(`data: ${JSON.stringify({ type: "done", outfit: fallback, outfit_guardado: null, cambiar_panel: true, sugerencias: [] })}\n\n`);
+      res.write("data: [DONE]\n\n");
+      return res.end();
+    }
+
+    const cambiarPanel = parsed.cambiar_panel ?? true;
+    const outfitGuardadoRecomendado = outfitsGuardados.find((p) => parsed.outfit_ids?.includes(p.id));
+
+    if (outfitGuardadoRecomendado) {
+      if (cambiarPanel) registrarRachaHoy(usuario_id);
+      res.write(`data: ${JSON.stringify({ type: "done", outfit: [], outfit_guardado: outfitGuardadoRecomendado, cambiar_panel: cambiarPanel, sugerencias })}\n\n`);
+    } else {
+      const outfitBruto = prendasSueltas.filter((p) => parsed.outfit_ids?.includes(p.id));
+      const outfit = deduplicarPorTipo(outfitBruto);
+      const fallback = deduplicarPorTipo([...prendasSueltas].sort(() => Math.random() - 0.5));
+      if (cambiarPanel) registrarRachaHoy(usuario_id);
+      res.write(`data: ${JSON.stringify({ type: "done", outfit: outfit.length ? outfit : fallback, outfit_guardado: null, cambiar_panel: cambiarPanel, sugerencias })}\n\n`);
+    }
+
+    res.write("data: [DONE]\n\n");
+    res.end();
+  } catch (err) {
+    console.error("🔥 fashion/stream:", err.message);
+    if (!res.headersSent) return res.status(500).json({ error: "Error interno" });
+    res.write(`data: ${JSON.stringify({ type: "error", message: "Error al generar el outfit." })}\n\n`);
+    res.write("data: [DONE]\n\n");
+    res.end();
+  }
+});
+
 app.post("/api/fashion", requireAuth, aiLimiter, async (req, res) => {
   try {
     const usuario_id = req.userId;
@@ -1244,7 +1479,9 @@ REGLAS DE COMBINACIÓN
    → Evita ropa exclusivamente formal o muy ajustada; elige prendas que sirvan para varios momentos
 
 Devuelve SIEMPRE y ÚNICAMENTE este JSON (sin texto antes ni después):
-{"respuesta":"[respuesta con el formato del punto 8]","outfit_ids":[id1,id2,id3],"cambiar_panel":true}`,
+{"respuesta":"[respuesta con el formato del punto 8]","outfit_ids":[id1,id2,id3],"cambiar_panel":true,"sugerencias":["frase corta 1","frase corta 2"]}
+
+Reglas para "sugerencias": 2-3 respuestas rápidas que el usuario podría querer decir a continuación, específicas para el outfit que acabas de recomendar. Máximo 40 caracteres cada una. Ejemplos: "¿Cambio el calzado?", "Algo más formal", "¿Sin chaqueta?", "Opción más casual", "¿Otro color?", "¿Qué accesorio agregas?". NO incluyas "Guárdalo en el calendario" — eso es un botón ya visible en la UI.`,
         },
         {
           role: "user",
