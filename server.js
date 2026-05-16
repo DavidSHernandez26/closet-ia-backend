@@ -1136,14 +1136,30 @@ app.post("/api/fashion/stream", requireAuth, aiLimiter, async (req, res) => {
 
 Tu misión: armar el outfit más inteligente posible usando EXACTAMENTE las prendas del closet del usuario.
 
-[Ver reglas completas en /api/fashion — mismas reglas aplican aquí]
+REGLAS DE COMBINACIÓN:
+• Plantilla clásica: 1 superior + 1 inferior + 1 calzado + 1 abrigo (obligatorio si sensación < 18°C o lluvia ≥ 40%; omitir si > 25°C) + accesorios disponibles
+• Plantilla vestido/jumpsuit: vestido + calzado + abrigo opcional + accesorios
+• NUNCA mezclar plantillas. NUNCA 2 prendas del mismo tipo.
+• Sudadera/hoodie = abrigo. Solo una capa exterior.
+• Si el usuario dice "sin X" → NUNCA incluir esa prenda.
+• Si pide cambiar una sola pieza → mantén el resto igual, solo cambia esa.
+• outfit_ids SOLO contiene IDs de prendas sueltas (tipo=prenda), NUNCA outfits guardados.
+
+CONTROL DEL PANEL:
+• "cambiar_panel": true → usuario pide outfit nuevo, diferente o cambiar una prenda
+• "cambiar_panel": false → solo hace una pregunta, pide consejo o comenta
 
 Devuelve SIEMPRE y ÚNICAMENTE este JSON (sin texto antes ni después):
-{"respuesta":"[respuesta con formato: apertura + bullets + tip]","outfit_ids":[id1,id2,id3],"cambiar_panel":true,"sugerencias":["frase corta 1","frase corta 2"]}
+{"respuesta":"[apertura del look + bullets: • prenda — razón específica + 💡 Tip]","outfit_ids":[id1,id2,id3],"cambiar_panel":true,"sugerencias":[{"text":"Sin chaqueta","action":"remove","tipo":"abrigo"},{"text":"Cambiar calzado","action":"swap","tipo":"calzado"},{"text":"¿Algo más formal?","action":"chat"}]}
 
-Reglas para "sugerencias": 2-3 respuestas rápidas específicas para el outfit que acabas de recomendar, máximo 40 chars cada una. Ej: "¿Cambio el calzado?", "Algo más formal", "¿Sin chaqueta?", "Opción más casual". NO incluyas "Guardar en calendario".
+"sugerencias": array de 2-3 objetos de acción concreta para el outfit:
+• {"action":"remove","tipo":"[tipo]","text":"Sin [prenda]"} → quita esa prenda instantáneamente sin llamar a la IA
+• {"action":"swap","tipo":"[tipo]","text":"Cambiar [prenda]"} → el usuario elige otra prenda de su closet
+• {"action":"chat","text":"[pregunta o variación]"} → continúa la conversación con el asistente
+Tipos válidos para tipo: parte superior, parte inferior, calzado, abrigo, gorra, accesorio
+text máximo 30 caracteres. NO incluyas "Guardar en calendario".
 
-Tono: cercano, seguro, como un amigo con buen gusto. Responde en español.`,
+Tono: cercano, seguro, como un amigo con buen gusto. Responde siempre en español.`,
         },
         {
           role: "user",
@@ -1160,6 +1176,7 @@ Tono: cercano, seguro, como un amigo con buen gusto. Responde en español.`,
     let state = "BEFORE_TEXT"; // BEFORE_TEXT | IN_TEXT | AFTER_TEXT
     let markerBuf = "";
     let fullAccumulated = "";
+    let pendingBackslash = false; // fix: escape split entre dos chunks
 
     for await (const chunk of stream) {
       if (clientGone) break;
@@ -1186,16 +1203,34 @@ Tono: cercano, seguro, como un amigo con buen gusto. Responde en español.`,
       // Extrae texto del campo respuesta, respetando escapes JSON
       let text = "";
       let i = 0;
+
+      // Si el chunk anterior terminó en \ suelto, procesarlo con el primer char de este chunk
+      if (pendingBackslash) {
+        pendingBackslash = false;
+        const esc = toProcess[0] ?? "";
+        if (esc === "n")  { text += "\n"; i = 1; }
+        else if (esc === '"') { text += '"'; i = 1; }
+        else if (esc === "t") { text += "\t"; i = 1; }
+        else if (esc === "\\") { text += "\\"; i = 1; }
+        else { text += "\\"; } // esc desconocido: emitir el backslash, no avanzar
+      }
+
       while (i < toProcess.length) {
         const ch = toProcess[i];
-        if (ch === "\\" && i + 1 < toProcess.length) {
-          const esc = toProcess[i + 1];
-          if (esc === "n") text += "\n";
-          else if (esc === '"') text += '"';
-          else if (esc === "t") text += "\t";
-          else if (esc === "\\") text += "\\";
-          else text += esc;
-          i += 2;
+        if (ch === "\\") {
+          if (i + 1 < toProcess.length) {
+            const esc = toProcess[i + 1];
+            if (esc === "n")  text += "\n";
+            else if (esc === '"')  text += '"';
+            else if (esc === "t")  text += "\t";
+            else if (esc === "\\") text += "\\";
+            else text += esc;
+            i += 2;
+          } else {
+            // Backslash al final del chunk — guardarlo para el siguiente
+            pendingBackslash = true;
+            break;
+          }
         } else if (ch === '"') {
           state = "AFTER_TEXT";
           break;
@@ -1214,7 +1249,6 @@ Tono: cercano, seguro, como un amigo con buen gusto. Responde en español.`,
 
     /* ── Parsear JSON completo y enviar evento final ── */
     const parsed = safeParseJSON(fullAccumulated);
-    const sugerencias = Array.isArray(parsed?.sugerencias) ? parsed.sugerencias.slice(0, 3) : [];
 
     if (!parsed) {
       const fallback = deduplicarPorTipo([...prendasSueltas].sort(() => Math.random() - 0.5));
@@ -1223,6 +1257,11 @@ Tono: cercano, seguro, como un amigo con buen gusto. Responde en español.`,
       res.write("data: [DONE]\n\n");
       return res.end();
     }
+
+    const rawSugs = Array.isArray(parsed.sugerencias) ? parsed.sugerencias.slice(0, 3) : [];
+    const sugerencias = rawSugs
+      .map(s => typeof s === "string" ? { text: s, action: "chat" } : s)
+      .filter(s => s?.text);
 
     const cambiarPanel = parsed.cambiar_panel ?? true;
     const outfitGuardadoRecomendado = outfitsGuardados.find((p) => parsed.outfit_ids?.includes(p.id));
@@ -1479,9 +1518,14 @@ REGLAS DE COMBINACIÓN
    → Evita ropa exclusivamente formal o muy ajustada; elige prendas que sirvan para varios momentos
 
 Devuelve SIEMPRE y ÚNICAMENTE este JSON (sin texto antes ni después):
-{"respuesta":"[respuesta con el formato del punto 8]","outfit_ids":[id1,id2,id3],"cambiar_panel":true,"sugerencias":["frase corta 1","frase corta 2"]}
+{"respuesta":"[respuesta con el formato del punto 8]","outfit_ids":[id1,id2,id3],"cambiar_panel":true,"sugerencias":[{"text":"Sin chaqueta","action":"remove","tipo":"abrigo"},{"text":"Cambiar calzado","action":"swap","tipo":"calzado"},{"text":"¿Algo más formal?","action":"chat"}]}
 
-Reglas para "sugerencias": 2-3 respuestas rápidas que el usuario podría querer decir a continuación, específicas para el outfit que acabas de recomendar. Máximo 40 caracteres cada una. Ejemplos: "¿Cambio el calzado?", "Algo más formal", "¿Sin chaqueta?", "Opción más casual", "¿Otro color?", "¿Qué accesorio agregas?". NO incluyas "Guárdalo en el calendario" — eso es un botón ya visible en la UI.`,
+"sugerencias": array de 2-3 objetos de acción concreta para el outfit recomendado:
+• {"action":"remove","tipo":"[tipo]","text":"Sin [prenda]"} → quita esa prenda del outfit instantáneamente
+• {"action":"swap","tipo":"[tipo]","text":"Cambiar [prenda]"} → el usuario elige otra prenda de su closet
+• {"action":"chat","text":"[variación o pregunta]"} → continúa la conversación
+Tipos válidos: parte superior, parte inferior, calzado, abrigo, gorra, accesorio. text ≤ 30 chars.
+NO incluyas "Guardar en calendario" — eso ya es un botón en la UI.`,
         },
         {
           role: "user",
@@ -1499,18 +1543,22 @@ Reglas para "sugerencias": 2-3 respuestas rápidas que el usuario podría querer
       registrarRachaHoy(usuario_id);
       return res.json({
         respuesta: "Te armé una combinación con lo que tienes disponible. ¡Pruébala y dime qué piensas!",
-        outfit: fallback, outfit_guardado: null, cambiar_panel: true,
+        outfit: fallback, outfit_guardado: null, cambiar_panel: true, sugerencias: [],
       });
     }
 
     const cambiarPanel = parsed.cambiar_panel ?? true;
+    const rawSugsF = Array.isArray(parsed.sugerencias) ? parsed.sugerencias.slice(0, 3) : [];
+    const sugerenciasF = rawSugsF
+      .map(s => typeof s === "string" ? { text: s, action: "chat" } : s)
+      .filter(s => s?.text);
     const outfitGuardadoRecomendado = outfitsGuardados.find((p) => parsed.outfit_ids?.includes(p.id));
 
     if (outfitGuardadoRecomendado) {
       if (cambiarPanel) registrarRachaHoy(usuario_id);
       return res.json({
         respuesta: parsed.respuesta,
-        outfit: [], outfit_guardado: outfitGuardadoRecomendado, cambiar_panel: cambiarPanel,
+        outfit: [], outfit_guardado: outfitGuardadoRecomendado, cambiar_panel: cambiarPanel, sugerencias: sugerenciasF,
       });
     }
 
@@ -1524,6 +1572,7 @@ Reglas para "sugerencias": 2-3 respuestas rápidas que el usuario podría querer
       outfit: outfit.length ? outfit : fallback,
       outfit_guardado: null,
       cambiar_panel: cambiarPanel,
+      sugerencias: sugerenciasF,
     });
   } catch (err) {
     console.error("🔥 fashion:", err.message);
