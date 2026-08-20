@@ -108,6 +108,15 @@ function getAuthDebug(token) {
 
 
 /* ─────────────────────────────────────
+   ❤️ HEALTH CHECK — mantiene Supabase activo
+───────────────────────────────────── */
+app.get("/api/health", async (_req, res) => {
+  const { error } = await supabase.from("profiles").select("id").limit(1);
+  if (error) return res.status(500).json({ ok: false });
+  res.json({ ok: true });
+});
+
+/* ─────────────────────────────────────
    🔐 AUTH MIDDLEWARE (Fix 2)
    Verifica el JWT de Supabase y adjunta req.userId
 ───────────────────────────────────── */
