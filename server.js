@@ -11,9 +11,9 @@ import { createClient } from "@supabase/supabase-js";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { crearExtractorRespuesta } from "./lib/streamRespuesta.js";
-import { normalizarTipo, subtipoAccesorio, safeParseJSON } from "./lib/outfit.js";
+import { safeParseJSON } from "./lib/outfit.js";
 import { fechaHoy, restarDias, calcularRacha } from "./lib/fechas.js";
-import { limpiarHistorial, construirMensajeUsuario, resolverOutfit } from "./lib/fashion.js";
+import { limpiarHistorial, limpiarClima, limpiarIdsAnteriores, construirMensajeUsuario, resolverOutfit } from "./lib/fashion.js";
 import { esUuid } from "./lib/validar.js";
 import { rutaDesdeUrlPublica } from "./lib/storage.js";
 import { FASHION_SYSTEM_PROMPT } from "./prompts/fashion.js";
@@ -627,7 +627,7 @@ Reglas para cada campo:
 
     if (tipo === "outfit") {
       const outfitName = `${usuario_id}_${Date.now()}_outfit.jpg`;
-      const outfitJpeg = await sharp(imagenOriginalBuffer).jpeg({ quality: 85 }).toBuffer();
+      const outfitJpeg = await sharp(imagenOriginalBuffer).flatten({ background: "#ffffff" }).jpeg({ quality: 85 }).toBuffer();
       const { error: uploadError } = await supabase.storage
         .from("prendas").upload(outfitName, outfitJpeg, { contentType: "image/jpeg" });
       if (uploadError) throw uploadError;
@@ -861,7 +861,7 @@ function validarPeticionFashion(body) {
   if (typeof mensaje !== "string" || !mensaje.trim() || mensaje.length > 1000)
     return { error: "Mensaje inválido" };
   if (!Array.isArray(outfit_ids_anteriores)) return { error: "Formato inválido" };
-  return { mensaje, historial: limpiarHistorial(historial), outfitIdsAnteriores: outfit_ids_anteriores, clima };
+  return { mensaje, historial: limpiarHistorial(historial), outfitIdsAnteriores: limpiarIdsAnteriores(outfit_ids_anteriores), clima: limpiarClima(clima) };
 }
 
 /* Prendas (con caché) + perfil + outfits recientes de calendar_outfits, en paralelo */
@@ -876,6 +876,7 @@ async function cargarDatosFashion(usuario_id) {
       .select("fecha, descripcion, metadata")
       .eq("usuario_id", usuario_id)
       .gte("fecha", restarDias(fechaHoy(), 14))
+      .lte("fecha", fechaHoy())
       .order("fecha", { ascending: false })
       .limit(10),
   ]);
@@ -943,7 +944,7 @@ app.post("/api/fashion/stream", requireAuth, aiLimiter, async (req, res) => {
 
     /* ── Cancelar si el cliente desconecta ── */
     let clientGone = false;
-    req.on("close", () => { clientGone = true; });
+    res.on("close", () => { if (!res.writableEnded) clientGone = true; });
 
     const stream = await openai.chat.completions.create({
       model: MODEL,
@@ -1538,6 +1539,8 @@ app.get("/api/racha", requireAuth, async (req, res) => {
 ───────────────────────────────────── */
 app.use((err, req, res, _next) => {
   if (res.headersSent) return _next(err);
+  if (err.type === "entity.parse.failed") return res.status(400).json({ error: "JSON inválido" });
+  if (err.type === "entity.too.large") return res.status(413).json({ error: "Petición demasiado grande" });
   if (err instanceof multer.MulterError) {
     if (err.code === "LIMIT_FILE_SIZE") {
       return res.status(413).json({ error: "Archivo demasiado grande (máx 10 MB)" });

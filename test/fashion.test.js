@@ -40,3 +40,32 @@ test("limpiarHistorial: descarta basura, limita a 10 y 1000 chars", () => {
   assert.equal(r[0].text.length, 1000);
   assert.deepEqual(limpiarHistorial("no"), []);
 });
+
+import { limpiarClima, limpiarIdsAnteriores } from "../lib/fashion.js";
+
+test("limpiarClima: no-objeto devuelve null", () => {
+  assert.equal(limpiarClima("x"), null);
+  assert.equal(limpiarClima(null), null);
+  assert.equal(limpiarClima([1]), null);
+});
+test("limpiarClima: convierte números y trunca strings", () => {
+  const r = limpiarClima({ temp: "20", feels: "18", wind: "5", rain_prob: "40", city: "a".repeat(500), label: "x".repeat(100) });
+  assert.equal(r.temp, 20);
+  assert.equal(r.feels, 18);
+  assert.equal(r.wind, 5);
+  assert.equal(r.rain_prob, 40);
+  assert.equal(r.city.length, 60);
+  assert.equal(r.label.length, 60);
+});
+test("limpiarClima: temp no numérica devuelve null; otros campos inválidos se descartan", () => {
+  assert.equal(limpiarClima({ temp: "abc" }), null);
+  const r = limpiarClima({ temp: 10, wind: "abc" });
+  assert.equal("wind" in r, false);
+});
+test("limpiarIdsAnteriores: tope de 30, strings, máx 64 chars", () => {
+  const ids = Array.from({ length: 100 }, (_, i) => i);
+  const r = limpiarIdsAnteriores(ids);
+  assert.equal(r.length, 30);
+  assert.equal(typeof r[0], "string");
+  assert.deepEqual(limpiarIdsAnteriores(["a", "b".repeat(65)]), ["a"]);
+});
