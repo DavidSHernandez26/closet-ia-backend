@@ -62,7 +62,8 @@ test("dos colores blanco y negro", () => {
 
 test("analogos cruzando 0 grados", () => {
   assert.equal(cumpleRegla([p("parte superior", "#FF0040"), p("parte inferior", "#FF6A00")], "analogos"), true);
-  });
+});
+
 test("analogos falla con arco amplio y con un solo no neutro", () => {
   assert.equal(cumpleRegla([p("parte superior", "#E02020"), p("parte inferior", "#2E8B57")], "analogos"), false);
   assert.equal(cumpleRegla([p("parte superior", "#E02020"), p("parte inferior", "#000000")], "analogos"), false);
@@ -88,4 +89,23 @@ test("prenda sin color no cuenta", () => {
   const ps = [p("parte superior", "#808080"), p("parte inferior", "#000000"), { descripcion: "y - parte inferior", metadata_ia: {} }, p("abrigo", "#E02020")];
   assert.equal(detectarRegla(ps), "neutros_acento");
   assert.equal(detectarRegla([]), null);
+});
+
+test("detectarRegla orden y casos", () => {
+  assert.equal(detectarRegla([p("parte superior", "#E02020"), p("parte inferior", "#000000")]), "neutros_acento");
+  assert.equal(detectarRegla([p("parte superior", "#FF0040"), p("parte inferior", "#FF6A00")]), "analogos");
+  assert.equal(detectarRegla([p("parte superior", "#E02020"), p("parte inferior", "#0057FF")]), "dos_colores");
+  assert.equal(detectarRegla([p("parte superior", "#FFFFFF"), p("parte inferior", "#000000")]), "dos_colores");
+  assert.equal(detectarRegla([p("parte superior", "#000000"), p("parte inferior", "#000000")]), "monocromatico");
+});
+
+test("prendas de outfits guardados usan prenda.tipo", () => {
+  assert.equal(cuentaParaRegla({ tipo: "calzado", color_medible: colorMedible("#000000") }), false);
+  const outfit = [
+    { tipo: "parte superior", color_medible: colorMedible("#FFFFFF") },
+    { tipo: "parte inferior", color_medible: colorMedible("#000000") },
+    { tipo: "calzado", color_medible: colorMedible("#6B3E1F") },
+  ];
+  assert.equal(cumpleRegla(outfit, "dos_colores", ["blanco", "negro"]), true);
+  assert.equal(cuentaParaRegla({ tipo: "prenda", color_medible: colorMedible("#000000") }), true);
 });
