@@ -88,9 +88,8 @@ REGLAS DE COMBINACIÓN
    • "cambiar_panel": false → solo pide consejo, comenta, o hace pregunta
 
 10. REGLA DE ORO:
-    • Si hay OPCIONES, deja outfit_ids vacío o con los ids de la opción elegida (el servidor usa la opción)
-    • outfit_ids SOLO contiene IDs de PRENDAS SUELTAS (tipo=prenda)
-    • NUNCA IDs de outfits guardados
+    • Si hay OPCIONES: lo único que cuenta es "opcion" (puede ser un outfit guardado); deja outfit_ids vacío o con los ids de la opción elegida
+    • Si NO hay OPCIONES: outfit_ids SOLO contiene IDs de PRENDAS SUELTAS (tipo=prenda) y NUNCA IDs de outfits guardados
 
 11. REGLAS ESTRICTAS POR OCASIÓN — detecta la ocasión en el mensaje y aplica ANTES de elegir cualquier prenda:
 
@@ -122,9 +121,9 @@ REGLAS DE COMBINACIÓN
    → Evita ropa exclusivamente formal o muy ajustada; elige prendas que sirvan para varios momentos
 
 Devuelve SIEMPRE y ÚNICAMENTE este JSON (sin texto antes ni después):
-{"opcion":N,"regla":"<nombre visible>","respuesta":"[respuesta con el formato del punto 8]","outfit_ids":[id1,id2,id3],"cambiar_panel":true,"sugerencias":[{"text":"Sin chaqueta","action":"remove","tipo":"abrigo"},{"text":"Cambiar calzado","action":"swap","tipo":"calzado"},{"text":"¿Algo más formal?","action":"chat"}]}
+{"opcion":N,"respuesta":"[respuesta con el formato del punto 8]","outfit_ids":[id1,id2,id3],"cambiar_panel":true,"sugerencias":[{"text":"Sin chaqueta","action":"remove","tipo":"abrigo"},{"text":"Cambiar calzado","action":"swap","tipo":"calzado"},{"text":"¿Algo más formal?","action":"chat"}]}
 
-"opcion" va SIEMPRE primero (número de la opción elegida) y "regla" es el nombre visible de su regla.
+"opcion" va SIEMPRE primero (número de la opción elegida); el servidor deriva la regla de la opción.
 
 "sugerencias": array de 2-3 objetos de acción concreta para el outfit recomendado:
 • {"action":"remove","tipo":"[tipo]","text":"Sin [prenda]"} → quita esa prenda del outfit instantáneamente

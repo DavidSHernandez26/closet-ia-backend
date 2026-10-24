@@ -73,13 +73,14 @@ test("limpiarIdsAnteriores: tope de 30, strings, máx 64 chars", () => {
 });
 
 /* ---- Task 6: opciones y elección ---- */
-const c1 = { ids: ["12", "13"], prendas: sueltas, regla: "monocromatico", puntaje: 5 };
-const c2 = { ids: ["13"], prendas: [sueltas[1]], regla: "analogos", puntaje: 3 };
+const c1 = { ids: sueltas.map(p => String(p.id)), prendas: sueltas, regla: "monocromatico", puntaje: 5 };
+const c2 = { ids: [String(sueltas[1].id)], prendas: [sueltas[1]], regla: "analogos", puntaje: 3 };
 const base = { perfil: null, clima: null, prendasSueltas: sueltas, outfitsGuardados: [], outfitIdsAnteriores: [], calendarioReciente: [], historial: [], mensaje: "hola" };
 
 test("leerOpcion: lee el número del JSON parcial", () => {
   assert.equal(leerOpcion('{"opcion": 3, "resp'), 3);
   assert.equal(leerOpcion('{"respuesta":"x'), null);
+  assert.equal(leerOpcion('{"opcion":"2","resp'), 2);
 });
 test("resolverEleccion: usa la opción elegida", () => {
   const r = resolverEleccion({ opcion: 2, cambiar_panel: false, sugerencias: ["a"] }, [c1, c2], sueltas, []);
@@ -100,7 +101,7 @@ test("resolverEleccion: opción inválida o ausente cae a la primera con valida 
   assert.equal(n.valida, false); assert.equal(n.cambiar_panel, true); assert.deepEqual(n.sugerencias, []);
 });
 test("resolverEleccion: candidato guardado devuelve outfit_guardado", () => {
-  const cg = { ids: ["99"], prendas: [guardado], regla: "neutros_acento", puntaje: 0 };
+  const cg = { ids: [String(guardado.id)], prendas: [guardado], regla: "neutros_acento", puntaje: 0 };
   const r = resolverEleccion({ opcion: 1 }, [cg], sueltas, [guardado]);
   assert.equal(r.outfit_guardado.id, 99);
   assert.deepEqual(r.outfit, []);
@@ -120,7 +121,12 @@ test("construirMensajeUsuario: bloque OPCIONES y AVISO_REGLA", () => {
   assert.doesNotMatch(s, /OPCIONES/);
 });
 test("prompt: opcion antes de respuesta y sin 'TODOS los accesorios'", () => {
-  assert.ok(FASHION_SYSTEM_PROMPT.includes('{"opcion":N,"regla":"<nombre visible>","respuesta"'));
+  assert.ok(FASHION_SYSTEM_PROMPT.includes('{"opcion":N,"respuesta"'));
   assert.ok(!FASHION_SYSTEM_PROMPT.includes("Incluye TODOS los accesorios"));
   assert.ok(FASHION_SYSTEM_PROMPT.includes("AVISO_REGLA"));
+});
+test("construirMensajeUsuario: EXCLUSIÓN OBLIGATORIA solo sin candidatos", () => {
+  const prev = { ...base, outfitIdsAnteriores: ["12"] };
+  assert.match(construirMensajeUsuario(prev), /EXCLUSIÓN OBLIGATORIA/);
+  assert.doesNotMatch(construirMensajeUsuario({ ...prev, candidatos: [c1] }), /EXCLUSIÓN OBLIGATORIA/);
 });
