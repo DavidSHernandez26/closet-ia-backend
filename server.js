@@ -15,6 +15,7 @@ import { normalizarTipo, subtipoAccesorio, safeParseJSON } from "./lib/outfit.js
 import { fechaHoy, restarDias, calcularRacha } from "./lib/fechas.js";
 import { limpiarHistorial, construirMensajeUsuario, resolverOutfit } from "./lib/fashion.js";
 import { esUuid } from "./lib/validar.js";
+import { rutaDesdeUrlPublica } from "./lib/storage.js";
 import { FASHION_SYSTEM_PROMPT } from "./prompts/fashion.js";
 
 dotenv.config();
@@ -619,8 +620,9 @@ Reglas para cada campo:
 
     if (tipo === "outfit") {
       const outfitName = `${usuario_id}_${Date.now()}_outfit.jpg`;
+      const outfitJpeg = await sharp(imagenOriginalBuffer).jpeg({ quality: 85 }).toBuffer();
       const { error: uploadError } = await supabase.storage
-        .from("prendas").upload(outfitName, imagenOriginalBuffer, { contentType: "image/jpeg" });
+        .from("prendas").upload(outfitName, outfitJpeg, { contentType: "image/jpeg" });
       if (uploadError) throw uploadError;
 
       imagenOriginalUrl = supabase.storage.from("prendas").getPublicUrl(outfitName).data.publicUrl;
@@ -707,11 +709,16 @@ app.get("/api/prendas", requireAuth, async (req, res) => {
 app.delete("/api/prendas/:id", requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const { data: prenda } = await supabase.from("prendas").select("usuario_id").eq("id", id).single();
+    const { data: prenda } = await supabase.from("prendas").select("usuario_id, imagen_url").eq("id", id).single();
     if (!prenda) return res.status(404).json({ error: "Prenda no encontrada" });
     if (prenda.usuario_id !== req.userId) return res.status(403).json({ error: "Sin permiso" });
     const { error } = await supabase.from("prendas").delete().eq("id", id);
     if (error) throw error;
+    const ruta = rutaDesdeUrlPublica(prenda.imagen_url);
+    if (ruta) {
+      const { error: errImg } = await supabase.storage.from("prendas").remove([ruta]);
+      if (errImg) console.error("⚠️ borrar imagen storage:", errImg.message);
+    }
     invalidatePrendasCache(req.userId);
     res.json({ mensaje: "🗑️ Eliminado" });
   } catch (err) {
@@ -1181,11 +1188,16 @@ app.get("/api/posts/:usuario_id", async (req, res) => {
 app.delete("/api/posts/:id", requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const { data: post } = await supabase.from("posts").select("usuario_id").eq("id", id).single();
+    const { data: post } = await supabase.from("posts").select("usuario_id, imagen_url").eq("id", id).single();
     if (!post) return res.status(404).json({ error: "Post no encontrado" });
     if (post.usuario_id !== req.userId) return res.status(403).json({ error: "Sin permiso" });
     const { error } = await supabase.from("posts").delete().eq("id", id);
     if (error) throw error;
+    const ruta = rutaDesdeUrlPublica(post.imagen_url);
+    if (ruta) {
+      const { error: errImg } = await supabase.storage.from("prendas").remove([ruta]);
+      if (errImg) console.error("⚠️ borrar imagen storage:", errImg.message);
+    }
     res.json({ mensaje: "🗑️ Post eliminado" });
   } catch (err) {
     fallar(res, "delete post", err);
