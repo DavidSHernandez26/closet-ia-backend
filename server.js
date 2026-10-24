@@ -1534,6 +1534,22 @@ app.get("/api/racha", requireAuth, async (req, res) => {
 });
 
 /* ─────────────────────────────────────
+   ⚠️ MANEJO DE ERRORES
+───────────────────────────────────── */
+app.use((err, req, res, _next) => {
+  if (res.headersSent) return _next(err);
+  if (err instanceof multer.MulterError) {
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return res.status(413).json({ error: "Archivo demasiado grande (máx 10 MB)" });
+    }
+    return res.status(400).json({ error: "Archivo inválido" });
+  }
+  if (err.status === 415) return res.status(415).json({ error: "Tipo de archivo no permitido" });
+  if (err.message === "CORS no permitido") return res.status(403).json({ error: "CORS no permitido" });
+  fallar(res, "error no controlado", err);
+});
+
+/* ─────────────────────────────────────
    🚀 START
 ───────────────────────────────────── */
 const PORT = process.env.PORT || 5001;
