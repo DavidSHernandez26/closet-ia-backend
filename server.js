@@ -116,9 +116,6 @@ async function requireAuth(req, res, next) {
 }
 
 /* ─────────────────────────────────────
-   🧠 PARSE JSON
-───────────────────────────────────── */
-/* ─────────────────────────────────────
    ⚡ CACHE DE PRENDAS EN MEMORIA
    Evita round-trips a Supabase en cada petición de fashion/swap
 ───────────────────────────────────── */
