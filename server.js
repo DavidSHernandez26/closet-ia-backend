@@ -164,7 +164,7 @@ function invalidatePrendasCache(uid) {
 }
 
 /* ─────────────────────────────────────
-   🧼 REMOVE BACKGROUND (servicio rembg en Railway)
+   🧼 REMOVE BACKGROUND (servicio rembg en Hugging Face Space)
    model: "birefnet-general" para prenda individual (alta calidad)
 ───────────────────────────────────── */
 async function removeBackground(imageBuffer, model = "birefnet-general") {
@@ -175,10 +175,11 @@ async function removeBackground(imageBuffer, model = "birefnet-general") {
       return null;
     }
 
-    // 512px es suficiente para el closet y procesa ~4x más rápido que 800px en CPU
+    // birefnet calcula la máscara a 1024px sin importar la entrada: achicar más solo pierde nitidez.
+    // 1200px coincide con la compresión del frontend.
     const resizedBuffer = await sharp(imageBuffer)
-      .resize(512, 512, { fit: "inside", withoutEnlargement: true })
-      .jpeg({ quality: 85 })
+      .resize(1200, 1200, { fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality: 92 })
       .toBuffer();
 
     const formData = new FormData();
