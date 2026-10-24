@@ -34,6 +34,15 @@ test("colorMedible: colores comunes de ropa", () => {
   assert.deepEqual(f("#40E0D0"), ["turquesa", false]);
   assert.equal(colorMedible("nope"), null);
 });
+test("colorMedible: neutros comunes y no-neutros cercanos", () => {
+  const f = (hex) => { const c = colorMedible(hex); return [c.familia, c.neutro]; };
+  assert.deepEqual(f("#FFFDD0"), ["beige", true]);
+  assert.deepEqual(f("#36454F"), ["gris", true]);
+  assert.deepEqual(f("#8FA9C9"), ["denim", true]);
+  assert.deepEqual(f("#8B7D6B"), ["beige", true]);
+  assert.deepEqual(f("#87CEEB"), ["azul", false]);
+  assert.deepEqual(f("#FFF176"), ["amarillo", false]);
+});
 test("familiaDeNombre", () => {
   assert.equal(familiaDeNombre("Verde Oliva"), "verde");
   assert.equal(familiaDeNombre("mostaza"), "amarillo");
