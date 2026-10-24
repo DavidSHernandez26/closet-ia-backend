@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolverOutfit, construirMensajeUsuario, limpiarHistorial } from "../lib/fashion.js";
+import { resolverOutfit, construirMensajeUsuario, limpiarHistorial, leerOpcion, resolverEleccion } from "../lib/fashion.js";
+import { NOMBRE_REGLA } from "../lib/reglas.js";
+import { FASHION_SYSTEM_PROMPT } from "../prompts/fashion.js";
 
 const sueltas = [
   { id: 12, tipo: "prenda", descripcion: "camiseta (blanco) - parte superior", metadata_ia: {} },
@@ -68,4 +70,57 @@ test("limpiarIdsAnteriores: tope de 30, strings, máx 64 chars", () => {
   assert.equal(r.length, 30);
   assert.equal(typeof r[0], "string");
   assert.deepEqual(limpiarIdsAnteriores(["a", "b".repeat(65)]), ["a"]);
+});
+
+/* ---- Task 6: opciones y elección ---- */
+const c1 = { ids: ["12", "13"], prendas: sueltas, regla: "monocromatico", puntaje: 5 };
+const c2 = { ids: ["13"], prendas: [sueltas[1]], regla: "analogos", puntaje: 3 };
+const base = { perfil: null, clima: null, prendasSueltas: sueltas, outfitsGuardados: [], outfitIdsAnteriores: [], calendarioReciente: [], historial: [], mensaje: "hola" };
+
+test("leerOpcion: lee el número del JSON parcial", () => {
+  assert.equal(leerOpcion('{"opcion": 3, "resp'), 3);
+  assert.equal(leerOpcion('{"respuesta":"x'), null);
+});
+test("resolverEleccion: usa la opción elegida", () => {
+  const r = resolverEleccion({ opcion: 2, cambiar_panel: false, sugerencias: ["a"] }, [c1, c2], sueltas, []);
+  assert.deepEqual(r.outfit.map(p => p.id), [13]);
+  assert.equal(r.regla, NOMBRE_REGLA.analogos);
+  assert.equal(r.valida, true);
+  assert.equal(r.cambiar_panel, false);
+  assert.deepEqual(r.sugerencias, [{ text: "a", action: "chat" }]);
+});
+test("resolverEleccion: opción inválida o ausente cae a la primera con valida false", () => {
+  for (const p of [{ opcion: 9 }, {}, { opcion: 0 }]) {
+    const r = resolverEleccion(p, [c1, c2], sueltas, []);
+    assert.deepEqual(r.outfit.map(x => x.id), [12, 13]);
+    assert.equal(r.valida, false);
+  }
+  assert.equal(resolverEleccion({}, [c1], sueltas, []).valida, false);
+  const n = resolverEleccion(null, [c1], sueltas, []);
+  assert.equal(n.valida, false); assert.equal(n.cambiar_panel, true); assert.deepEqual(n.sugerencias, []);
+});
+test("resolverEleccion: candidato guardado devuelve outfit_guardado", () => {
+  const cg = { ids: ["99"], prendas: [guardado], regla: "neutros_acento", puntaje: 0 };
+  const r = resolverEleccion({ opcion: 1 }, [cg], sueltas, [guardado]);
+  assert.equal(r.outfit_guardado.id, 99);
+  assert.deepEqual(r.outfit, []);
+});
+test("resolverEleccion: sin candidatos delega en resolverOutfit", () => {
+  const r = resolverEleccion({ outfit_ids: [12] }, [], sueltas, []);
+  assert.deepEqual(r.outfit.map(p => p.id), [12]);
+  assert.equal(r.regla, null);
+  assert.equal(r.valida, true);
+});
+test("construirMensajeUsuario: bloque OPCIONES y AVISO_REGLA", () => {
+  const t = construirMensajeUsuario({ ...base, candidatos: [c1], avisoRegla: "no alcanza" });
+  assert.match(t, /OPCIONES \(elige una por número\):/);
+  assert.match(t, /1\) \[Monocromático\]/);
+  assert.match(t, /AVISO_REGLA: no alcanza/);
+  const s = construirMensajeUsuario(base);
+  assert.doesNotMatch(s, /OPCIONES/);
+});
+test("prompt: opcion antes de respuesta y sin 'TODOS los accesorios'", () => {
+  assert.ok(FASHION_SYSTEM_PROMPT.includes('{"opcion":N,"regla":"<nombre visible>","respuesta"'));
+  assert.ok(!FASHION_SYSTEM_PROMPT.includes("Incluye TODOS los accesorios"));
+  assert.ok(FASHION_SYSTEM_PROMPT.includes("AVISO_REGLA"));
 });

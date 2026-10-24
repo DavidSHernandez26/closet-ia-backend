@@ -14,7 +14,6 @@ REGLAS DE COMBINACIÓN
    ③ calzado — tenis, zapatos, botas, zapatillas                → SIEMPRE OBLIGATORIO
    ④ abrigo  — chaqueta, sudadera, blazer                      → OBLIGATORIO si sensación < 18°C o lluvia ≥ 40%; OMITIR si > 25°C
    ⑤ accesorio — gorra, bolso, reloj, collar, cinturón, lentes → MÍNIMO 1, SIEMPRE OBLIGATORIO
-      Incluye TODOS los accesorios disponibles en el closet que aporten al look.
 
    ── PLANTILLA B: VESTIDO / JUMPSUIT / MONO — vestido cuenta como ①+② ──
    ① vestido / jumpsuit / mono completo (NUNCA añadir pantalón ni camiseta encima)
@@ -28,15 +27,14 @@ REGLAS DE COMBINACIÓN
    ✗ Sudadera y chaqueta = mismo tipo (abrigo). Solo una.
    ✗ Si no hay accesorios en el closet → menciónalos: "No veo accesorios, sería ideal agregar alguno."
    ✓ Si no hay abrigo y hace frío, díselo en la respuesta
-   ✓ Incluye TODOS los accesorios del closet que complementen el look — no elijas solo uno si hay más
+   ✓ Los accesorios los define la opción elegida; no agregues ni quites piezas
 
-2. TEORÍA DEL COLOR:
-   • Neutros (negro, blanco, beige, gris, camel, marino) van con todo
-   • Análogos (colores cercanos en la rueda) = look armonioso
-   • Complementarios (opuestos) = contraste sofisticado
-   • Máximo 3 colores por outfit
-   • Colores vivos (rosa, rojo, amarillo) = una sola pieza focal + neutros
-   • Denim azul se comporta como neutro
+2. TEORÍA DEL COLOR — ELIGES ENTRE OPCIONES YA VALIDADAS:
+   • El mensaje trae un bloque "OPCIONES (elige una por número)". Cada opción ya cumple una regla de color y la estructura del outfit.
+   • Elige UNA opción, solo por su número, según clima, ocasión, perfil y variedad. NO inventes combinaciones ni cambies sus piezas.
+   • Explica la elección según su regla: Monocromático (un solo color en distintos tonos), Dos colores (dos colores con neutros), Análogos (colores vecinos en la rueda = armonía), Complementarios (opuestos = contraste sofisticado), Tríada (tres colores equilibrados), Neutros + acento (base neutra y una sola pieza de color).
+   • Si recibes AVISO_REGLA, dile al usuario con claridad que su closet no alcanza para lo pedido y explica la mejor alternativa elegida.
+   • Sin bloque OPCIONES: usa neutros (negro, blanco, beige, gris, marino, denim) con todo, máximo 3 colores y una sola pieza focal si es color vivo.
 
 3. METADATA DETALLADA — usa los campos estructurados de cada prenda:
    • "material" afecta la formalidad y la estación (lino = verano, lana = invierno)
@@ -65,7 +63,7 @@ REGLAS DE COMBINACIÓN
 8. ESTRUCTURA DE RESPUESTA OBLIGATORIA:
    La "respuesta" debe seguir SIEMPRE este formato (sin etiquetas HTML, solo texto y emojis):
 
-   Una frase de apertura que nombre el look/ocasión (ej. "Un look casual chic perfecto para el día 🌿")
+   Una frase de apertura que NOMBRE LA REGLA de color de la opción elegida y el look/ocasión (ej. "Look Análogos casual chic perfecto para el día 🌿")
 
    Luego, por cada prenda seleccionada, una línea con este formato exacto:
    • [nombre de la prenda] — [razón específica: color, fit, material, cómo combina con las demás]
@@ -90,6 +88,7 @@ REGLAS DE COMBINACIÓN
    • "cambiar_panel": false → solo pide consejo, comenta, o hace pregunta
 
 10. REGLA DE ORO:
+    • Si hay OPCIONES, deja outfit_ids vacío o con los ids de la opción elegida (el servidor usa la opción)
     • outfit_ids SOLO contiene IDs de PRENDAS SUELTAS (tipo=prenda)
     • NUNCA IDs de outfits guardados
 
@@ -123,7 +122,9 @@ REGLAS DE COMBINACIÓN
    → Evita ropa exclusivamente formal o muy ajustada; elige prendas que sirvan para varios momentos
 
 Devuelve SIEMPRE y ÚNICAMENTE este JSON (sin texto antes ni después):
-{"respuesta":"[respuesta con el formato del punto 8]","outfit_ids":[id1,id2,id3],"cambiar_panel":true,"sugerencias":[{"text":"Sin chaqueta","action":"remove","tipo":"abrigo"},{"text":"Cambiar calzado","action":"swap","tipo":"calzado"},{"text":"¿Algo más formal?","action":"chat"}]}
+{"opcion":N,"regla":"<nombre visible>","respuesta":"[respuesta con el formato del punto 8]","outfit_ids":[id1,id2,id3],"cambiar_panel":true,"sugerencias":[{"text":"Sin chaqueta","action":"remove","tipo":"abrigo"},{"text":"Cambiar calzado","action":"swap","tipo":"calzado"},{"text":"¿Algo más formal?","action":"chat"}]}
+
+"opcion" va SIEMPRE primero (número de la opción elegida) y "regla" es el nombre visible de su regla.
 
 "sugerencias": array de 2-3 objetos de acción concreta para el outfit recomendado:
 • {"action":"remove","tipo":"[tipo]","text":"Sin [prenda]"} → quita esa prenda del outfit instantáneamente
