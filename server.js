@@ -20,7 +20,7 @@ import { FASHION_SYSTEM_PROMPT } from "./prompts/fashion.js";
 dotenv.config();
 
 const app = express();
-app.set("trust proxy", 1); // necesario para Railway (proxy inverso)
+app.set("trust proxy", 1); // proxy de Fly.io
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
   contentSecurityPolicy: false,
@@ -50,7 +50,7 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// Fix 7 — rate limit en endpoints con IA (OpenAI + rembg)
+// rate limit en endpoints con IA (OpenAI + rembg)
 const aiLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 10,
@@ -70,9 +70,6 @@ const upload = multer({
   },
 });
 
-async function cleanupFile(path) {
-  if (path) fs.unlink(path, () => {});
-}
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -81,35 +78,9 @@ const supabase = createClient(
 
 const MODEL = "gpt-4o-mini";
 
-function getSupabaseProjectRef(value) {
-  if (!value) return null;
-  try {
-    const host = new URL(value).hostname;
-    return host.endsWith(".supabase.co") ? host.split(".")[0] : null;
-  } catch {
-    return null;
-  }
-}
-
-function decodeJwtPayload(token) {
-  try {
-    const payload = token.split(".")[1];
-    if (!payload) return null;
-    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
-    return JSON.parse(Buffer.from(normalized, "base64").toString("utf8"));
-  } catch {
-    return null;
-  }
-}
-
-function getAuthDebug(token) {
-  const payload = decodeJwtPayload(token);
-  return {
-    backendProject: getSupabaseProjectRef(process.env.SUPABASE_URL),
-    tokenProject: getSupabaseProjectRef(payload?.iss),
-    tokenAud: payload?.aud || null,
-    tokenExp: payload?.exp ? new Date(payload.exp * 1000).toISOString() : null,
-  };
+function fallar(res, etiqueta, err, status = 500) {
+  console.error(`🔥 ${etiqueta}:`, err.message);
+  res.status(status).json({ error: "Error interno" });
 }
 
 
@@ -123,7 +94,7 @@ app.get("/api/health", async (_req, res) => {
 });
 
 /* ─────────────────────────────────────
-   🔐 AUTH MIDDLEWARE (Fix 2)
+   🔐 AUTH MIDDLEWARE
    Verifica el JWT de Supabase y adjunta req.userId
 ───────────────────────────────────── */
 async function requireAuth(req, res, next) {
@@ -133,15 +104,10 @@ async function requireAuth(req, res, next) {
 
   const { data: { user }, error } = await supabase.auth.getUser(token);
   if (error || !user) {
-    const debug = getAuthDebug(token);
-    console.warn("[auth] Token rechazado", {
-      ...debug,
-      reason: error?.message || "Usuario no encontrado",
-    });
+    console.warn("[auth] Token rechazado", { reason: error?.message || "Usuario no encontrado" });
     return res.status(401).json({
       error: "Token inválido",
       code: "AUTH_TOKEN_INVALID",
-      details: debug,
     });
   }
 
@@ -262,8 +228,7 @@ app.get("/api/perfil/me", requireAuth, async (req, res) => {
     if (error) throw error;
     res.json(data);
   } catch (err) {
-    console.error("🔥 perfil/me:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "perfil/me", err);
   }
 });
 
@@ -277,8 +242,7 @@ app.get("/api/perfil/:username", async (req, res) => {
     if (error) return res.status(404).json({ error: "Usuario no encontrado" });
     res.json(data);
   } catch (err) {
-    console.error("🔥 perfil/:username:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "perfil/:username", err);
   }
 });
 
@@ -295,8 +259,7 @@ app.get("/api/usuarios/buscar", requireAuth, async (req, res) => {
     if (error) throw error;
     res.json(data || []);
   } catch (err) {
-    console.error("🔥 buscar usuarios:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "buscar usuarios", err);
   }
 });
 
@@ -335,8 +298,7 @@ app.get("/api/usuarios/sugeridos", requireAuth, async (req, res) => {
     if (error) throw error;
     res.json(data || []);
   } catch (err) {
-    console.error("🔥 sugeridos:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "sugeridos", err);
   }
 });
 
@@ -370,8 +332,7 @@ app.put("/api/perfil", requireAuth, async (req, res) => {
     if (error) throw error;
     res.json(data);
   } catch (err) {
-    console.error("🔥 put perfil:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "put perfil", err);
   }
 });
 
@@ -391,8 +352,7 @@ app.post("/api/perfil/avatar", requireAuth, upload.single("avatar"), async (req,
     await supabase.from("profiles").update({ avatar_url: avatarUrl }).eq("id", usuario_id);
     res.json({ avatar_url: avatarUrl });
   } catch (err) {
-    console.error("🔥 avatar:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "avatar", err);
   } finally {
     if (req.file) await fs.promises.unlink(req.file.path).catch(() => {});
   }
@@ -436,8 +396,7 @@ app.post("/api/amistad/solicitar", requireAuth, async (req, res) => {
 
     res.json({ mensaje: "✅ Solicitud enviada", data });
   } catch (err) {
-    console.error("🔥 solicitar amistad:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "solicitar amistad", err);
   }
 });
 
@@ -468,8 +427,7 @@ app.put("/api/amistad/responder", requireAuth, async (req, res) => {
 
     res.json({ mensaje: `✅ Solicitud ${status}`, data });
   } catch (err) {
-    console.error("🔥 responder amistad:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "responder amistad", err);
   }
 });
 
@@ -483,8 +441,7 @@ app.get("/api/amistad/solicitudes", requireAuth, async (req, res) => {
     if (error) throw error;
     res.json(data || []);
   } catch (err) {
-    console.error("🔥 solicitudes:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "solicitudes", err);
   }
 });
 
@@ -507,8 +464,7 @@ app.get("/api/amistad/amigos", requireAuth, async (req, res) => {
     });
     res.json(amigos);
   } catch (err) {
-    console.error("🔥 amigos:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "amigos", err);
   }
 });
 
@@ -541,8 +497,7 @@ app.delete("/api/amistad/:id", requireAuth, async (req, res) => {
     if (error) throw error;
     res.json({ mensaje: "🗑️ Amistad eliminada" });
   } catch (err) {
-    console.error("🔥 eliminar amistad:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "eliminar amistad", err);
   }
 });
 
@@ -565,8 +520,7 @@ app.get("/api/prendas/amigo/:amigo_id", requireAuth, async (req, res) => {
     if (error) throw error;
     res.json(data || []);
   } catch (err) {
-    console.error("🔥 prendas amigo:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "prendas amigo", err);
   }
 });
 
@@ -718,8 +672,7 @@ Reglas: colores específicos, nombres correctos, tipos: calzado/parte superior/p
 
     res.status(400).json({ error: "Tipo inválido, usa 'prenda' o 'outfit'" });
   } catch (err) {
-    console.error("🔥 subir-prenda:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "subir-prenda", err);
   } finally {
     if (req.file) await fs.promises.unlink(req.file.path).catch(() => {});
   }
@@ -747,8 +700,7 @@ app.get("/api/prendas", requireAuth, async (req, res) => {
     if (!tipo || tipo === "todos") setCachedPrendas(usuario_id, data || []);
     res.json(data || []);
   } catch (err) {
-    console.error("🔥 get prendas:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "get prendas", err);
   }
 });
 
@@ -766,8 +718,7 @@ app.delete("/api/prendas/:id", requireAuth, async (req, res) => {
     invalidatePrendasCache(req.userId);
     res.json({ mensaje: "🗑️ Eliminado" });
   } catch (err) {
-    console.error("🔥 delete:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "delete", err);
   }
 });
 
@@ -874,8 +825,7 @@ fit: slim | regular | oversized | ajustado | holgado`,
     invalidatePrendasCache(usuario_id);
     res.json({ mensaje: `✅ ${actualizadas} de ${pendientes.length} prendas actualizadas.`, actualizadas, total: pendientes.length });
   } catch (err) {
-    console.error("🔥 reanalizar:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "reanalizar", err);
   }
 });
 
@@ -1099,7 +1049,7 @@ app.post("/api/recomendaciones-compra", requireAuth, aiLimiter, async (req, res)
 });
 
 /* ─────────────────────────────────────
-   🔢 HELPER — enrich posts (Fix 1: evita N+1 queries)
+   🔢 HELPER — enrich posts (evita N+1 queries)
    3 queries totales sin importar cuántos posts haya
 ───────────────────────────────────── */
 async function enrichPosts(posts, postIds, viewerUserId) {
@@ -1153,7 +1103,7 @@ app.post("/api/posts", requireAuth, upload.single("imagen"), async (req, res) =>
 
     const imagen_url = supabase.storage.from("prendas").getPublicUrl(fileName).data.publicUrl;
 
-    // Fix 6 — JSON.parse seguro
+    // JSON.parse seguro
     let prendasParsed = [];
     if (prendas) {
       try { prendasParsed = JSON.parse(prendas); } catch { prendasParsed = []; }
@@ -1166,8 +1116,7 @@ app.post("/api/posts", requireAuth, upload.single("imagen"), async (req, res) =>
     if (error) throw error;
     res.json(data);
   } catch (err) {
-    console.error("🔥 crear post:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "crear post", err);
   } finally {
     if (req.file) await fs.promises.unlink(req.file.path).catch(() => {});
   }
@@ -1211,8 +1160,7 @@ app.get("/api/feed", requireAuth, async (req, res) => {
 
     res.json({ posts: postsConData, nextCursor });
   } catch (err) {
-    console.error("🔥 feed:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "feed", err);
   }
 });
 
@@ -1229,8 +1177,7 @@ app.get("/api/posts/:usuario_id", async (req, res) => {
     const postsConData = postIds.length === 0 ? [] : await enrichPosts(data, postIds, viewer_id || null);
     res.json(postsConData);
   } catch (err) {
-    console.error("🔥 posts usuario:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "posts usuario", err);
   }
 });
 
@@ -1244,8 +1191,7 @@ app.delete("/api/posts/:id", requireAuth, async (req, res) => {
     if (error) throw error;
     res.json({ mensaje: "🗑️ Post eliminado" });
   } catch (err) {
-    console.error("🔥 delete post:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "delete post", err);
   }
 });
 
@@ -1285,8 +1231,7 @@ app.post("/api/likes", requireAuth, async (req, res) => {
 
     res.json({ liked: true });
   } catch (err) {
-    console.error("🔥 like:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "like", err);
   }
 });
 
@@ -1303,8 +1248,7 @@ app.get("/api/comments/:post_id", async (req, res) => {
     if (error) throw error;
     res.json(data || []);
   } catch (err) {
-    console.error("🔥 get comments:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "get comments", err);
   }
 });
 
@@ -1334,8 +1278,7 @@ app.post("/api/comments", requireAuth, async (req, res) => {
 
     res.json(data);
   } catch (err) {
-    console.error("🔥 comentar:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "comentar", err);
   }
 });
 
@@ -1349,8 +1292,7 @@ app.delete("/api/comments/:id", requireAuth, async (req, res) => {
     if (error) throw error;
     res.json({ mensaje: "🗑️ Comentario eliminado" });
   } catch (err) {
-    console.error("🔥 delete comment:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "delete comment", err);
   }
 });
 
@@ -1368,8 +1310,7 @@ app.get("/api/wishlist", requireAuth, async (req, res) => {
     if (error) throw error;
     res.json(data || []);
   } catch (err) {
-    console.error("🔥 wishlist:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "wishlist", err);
   }
 });
 
@@ -1390,8 +1331,7 @@ app.post("/api/wishlist", requireAuth, async (req, res) => {
     await supabase.from("wishlist").insert([{ usuario_id, post_id, imagen_url, descripcion }]);
     res.json({ saved: true });
   } catch (err) {
-    console.error("🔥 wishlist toggle:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "wishlist toggle", err);
   }
 });
 
@@ -1405,8 +1345,7 @@ app.delete("/api/wishlist/:id", requireAuth, async (req, res) => {
     if (error) throw error;
     res.json({ mensaje: "🗑️ Eliminado de wishlist" });
   } catch (err) {
-    console.error("🔥 delete wishlist:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "delete wishlist", err);
   }
 });
 
@@ -1424,8 +1363,7 @@ app.get("/api/notificaciones/count", requireAuth, async (req, res) => {
     if (error) throw error;
     res.json({ count: count || 0 });
   } catch (err) {
-    console.error("🔥 notif count:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "notif count", err);
   }
 });
 
@@ -1444,8 +1382,7 @@ app.get("/api/notificaciones", requireAuth, async (req, res) => {
     if (error) throw error;
     res.json(data || []);
   } catch (err) {
-    console.error("🔥 notificaciones:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "notificaciones", err);
   }
 });
 
@@ -1460,8 +1397,7 @@ app.put("/api/notificaciones/leer", requireAuth, async (req, res) => {
     if (error) throw error;
     res.json({ ok: true });
   } catch (err) {
-    console.error("🔥 marcar leidas:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "marcar leidas", err);
   }
 });
 
@@ -1475,8 +1411,7 @@ app.delete("/api/notificaciones/:id", requireAuth, async (req, res) => {
     if (error) throw error;
     res.json({ ok: true });
   } catch (err) {
-    console.error("🔥 delete notif:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "delete notif", err);
   }
 });
 
@@ -1490,8 +1425,7 @@ app.delete("/api/notificaciones", requireAuth, async (req, res) => {
     if (error) throw error;
     res.json({ ok: true });
   } catch (err) {
-    console.error("🔥 delete todas notif:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "delete todas notif", err);
   }
 });
 
@@ -1520,8 +1454,7 @@ app.get("/api/calendario", requireAuth, async (req, res) => {
     if (error) throw error;
     res.json(data || []);
   } catch (err) {
-    console.error("🔥 get calendario:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "get calendario", err);
   }
 });
 
@@ -1541,8 +1474,7 @@ app.post("/api/calendario", requireAuth, async (req, res) => {
     if (error) throw error;
     res.json(data);
   } catch (err) {
-    console.error("🔥 post calendario:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "post calendario", err);
   }
 });
 
@@ -1557,8 +1489,7 @@ app.delete("/api/calendario/:id", requireAuth, async (req, res) => {
     if (error) throw error;
     res.json({ ok: true });
   } catch (err) {
-    console.error("🔥 delete calendario:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "delete calendario", err);
   }
 });
 
@@ -1581,8 +1512,7 @@ app.get("/api/racha", requireAuth, async (req, res) => {
 
     res.json(calcularRacha((data || []).map(e => e.fecha), fechaHoy()));
   } catch (err) {
-    console.error("🔥 racha:", err.message);
-    res.status(500).json({ error: err.message });
+    fallar(res, "racha", err);
   }
 });
 
