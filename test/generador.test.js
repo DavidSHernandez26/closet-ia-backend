@@ -185,3 +185,32 @@ test("candidatosGuardados", () => {
   for (const c of libres) assert.ok(c.regla);
   assert.deepEqual(candidatosGuardados(todos, "triada", []), []);
 });
+
+test("closet a medio analizar: calzado/abrigo sin color → []", () => {
+  const camisa = prenda("camisa", "parte superior", "#1E50C8");
+  const pant = prenda("pantalón negro", "parte inferior", "#111111");
+  const zap = prenda("zapatos", "calzado", null);
+  const chaqueta = prenda("chaqueta", "abrigo", null);
+  assert.deepEqual(generarCandidatos({ prendas: [camisa, pant, zap, chaqueta], regla: null, clima: { temp: 5 } }), []);
+  // sin calzado en absoluto sí arma (sin zapatos)
+  const sinNada = generarCandidatos({ prendas: [camisa, pant], regla: null });
+  assert.ok(sinNada.length > 0);
+  // abrigo sin color pero opcional (clima templado, zapatos con color): sí arma
+  const zapC = prenda("zapatos negros", "calzado", "#000000");
+  assert.ok(generarCandidatos({ prendas: [camisa, pant, zapC, chaqueta], regla: null, clima: { temp: 21 } }).length > 0);
+});
+
+test("aptaParaClima: temp null es sin clima", () => {
+  assert.equal(aptaParaClima(short, { temp: null }), true);
+  assert.equal(aptaParaClima(abrigoGris, { temp: null, feels: null }), true);
+});
+
+test("calor con lluvia: abrigo de lluvia opcional, otros no", () => {
+  const imper = prenda("impermeable amarillo", "abrigo", "#808080");
+  assert.equal(aptaParaClima(imper, { temp: 28, rain_prob: 60 }), true);
+  assert.equal(aptaParaClima(imper, { temp: 28, rain_prob: 10 }), false);
+  assert.equal(aptaParaClima(abrigoGris, { temp: 28, rain_prob: 60 }), false);
+  const cs = generarCandidatos({ prendas: [...closet, imper], regla: null, clima: { temp: 28, rain_prob: 60 }, max: 20 });
+  assert.ok(cs.length > 0);
+  for (const c of cs) assert.ok(!c.ids.includes(id(abrigoGris)));
+});
