@@ -13,7 +13,8 @@ import rateLimit from "express-rate-limit";
 import { crearExtractorRespuesta } from "./lib/streamRespuesta.js";
 import { safeParseJSON } from "./lib/outfit.js";
 import { fechaHoy, restarDias, calcularRacha } from "./lib/fechas.js";
-import { limpiarHistorial, limpiarClima, limpiarIdsAnteriores, construirMensajeUsuario, resolverOutfit } from "./lib/fashion.js";
+import { limpiarHistorial, limpiarClima, limpiarIdsAnteriores, construirMensajeUsuario, leerOpcion } from "./lib/fashion.js";
+import { prepararOpciones, puedeTransmitir, cerrarRespuesta, metadataCalendario } from "./lib/opciones.js";
 import { esUuid } from "./lib/validar.js";
 import { rutaDesdeUrlPublica } from "./lib/storage.js";
 import { colorMedible, faltaColorMedible } from "./lib/color.js";
@@ -973,7 +974,7 @@ function validarPeticionFashion(body) {
 /* Prendas (con caché) + perfil + outfits recientes de calendar_outfits, en paralelo */
 async function cargarDatosFashion(usuario_id) {
   let prendas = getCachedPrendas(usuario_id);
-  const [prendasResult, perfilResult, calendarioResult] = await Promise.allSettled([
+  const [prendasResult, perfilResult, calendarioResult, estiloResult] = await Promise.allSettled([
     prendas
       ? Promise.resolve({ data: prendas })
       : supabase.from("prendas").select("*").eq("usuario_id", usuario_id).order("created_at", { ascending: false }),
@@ -985,6 +986,12 @@ async function cargarDatosFashion(usuario_id) {
       .lte("fecha", fechaHoy())
       .order("fecha", { ascending: false })
       .limit(10),
+    // Historial más largo, sin filtro de fecha, para aprender el estilo en silencio
+    supabase.from("calendar_outfits")
+      .select("fecha, metadata")
+      .eq("usuario_id", usuario_id)
+      .order("fecha", { ascending: false })
+      .limit(60),
   ]);
 
   if (!prendas) {
@@ -993,11 +1000,12 @@ async function cargarDatosFashion(usuario_id) {
   }
   const perfil = perfilResult.status === "fulfilled" ? perfilResult.value.data : null;
   const calendarioReciente = calendarioResult.status === "fulfilled" ? (calendarioResult.value.data || []) : [];
-  return { prendas, perfil, calendarioReciente };
+  const calendarioEstilo = estiloResult.status === "fulfilled" ? (estiloResult.value.data || []) : [];
+  return { prendas, perfil, calendarioReciente, calendarioEstilo };
 }
 
 /* Mensajes para OpenAI, idénticos en ambos endpoints */
-function mensajesFashion({ datos, prendasSueltas, outfitsGuardados, peticion }) {
+function mensajesFashion({ datos, prendasSueltas, outfitsGuardados, peticion, opciones }) {
   return [
     { role: "system", content: FASHION_SYSTEM_PROMPT },
     {
@@ -1011,6 +1019,8 @@ function mensajesFashion({ datos, prendasSueltas, outfitsGuardados, peticion }) 
         calendarioReciente: datos.calendarioReciente,
         historial: peticion.historial,
         mensaje: peticion.mensaje,
+        candidatos: opciones.candidatos,
+        avisoRegla: opciones.avisoRegla,
       }),
     },
   ];
@@ -1046,6 +1056,8 @@ app.post("/api/fashion/stream", requireAuth, aiLimiter, async (req, res) => {
     const prendasSueltas = datos.prendas.filter((p) => p.tipo === "prenda");
     const outfitsGuardados = datos.prendas.filter((p) => p.tipo === "outfit");
 
+    const opciones = prepararOpciones({ datos, prendasSueltas, outfitsGuardados, peticion });
+
     iniciarSSE(res);
 
     /* ── Cancelar si el cliente desconecta ── */
@@ -1054,15 +1066,18 @@ app.post("/api/fashion/stream", requireAuth, aiLimiter, async (req, res) => {
 
     const stream = await openai.chat.completions.create({
       model: MODEL,
-      messages: mensajesFashion({ datos, prendasSueltas, outfitsGuardados, peticion }),
+      messages: mensajesFashion({ datos, prendasSueltas, outfitsGuardados, peticion, opciones }),
       max_tokens: 900,
       temperature: 0.7,
       stream: true,
     });
 
-    /* ── Extrae "respuesta" mientras acumula el JSON completo ── */
+    /* ── Extrae "respuesta" mientras acumula el JSON completo. Con opciones, antes del primer
+       chunk se valida "opcion": si no es válida (y no es una pregunta pura) el texto de la IA
+       se retiene y al final se envía uno solo (el propio del backend o el de la IA). ── */
     const extractor = crearExtractorRespuesta();
     let fullAccumulated = "";
+    let transmitir = null; // null = aún no se decide
 
     for await (const chunk of stream) {
       if (clientGone) break;
@@ -1071,14 +1086,21 @@ app.post("/api/fashion/stream", requireAuth, aiLimiter, async (req, res) => {
       fullAccumulated += rawPiece;
 
       const text = extractor.push(rawPiece);
-      if (text && !clientGone) {
+      if (!text) continue;
+      if (transmitir === null) transmitir = puedeTransmitir(fullAccumulated, opciones.candidatos);
+      if (transmitir && !clientGone) {
         res.write(`data: ${JSON.stringify({ type: "text", chunk: text })}\n\n`);
       }
     }
 
     if (clientGone) return res.end();
 
-    const resultado = resolverOutfit(safeParseJSON(fullAccumulated), prendasSueltas, outfitsGuardados);
+    // JSON roto tras transmitir una opción válida: se respeta la opción ya narrada.
+    const opcionLeida = leerOpcion(fullAccumulated);
+    const parsed = safeParseJSON(fullAccumulated) ?? (transmitir && opcionLeida ? { opcion: opcionLeida } : null);
+    const { resultado, respuesta } = cerrarRespuesta(parsed, opciones, prendasSueltas, outfitsGuardados);
+    // Texto retenido (o la IA nunca escribió "respuesta" habiendo opciones): un solo chunk.
+    if (transmitir === false || (transmitir === null && opciones.candidatos.length)) res.write(`data: ${JSON.stringify({ type: "text", chunk: respuesta })}\n\n`);
     if (resultado.cambiar_panel) registrarRachaHoy(usuario_id);
     res.write(`data: ${JSON.stringify({ type: "done", ...resultado })}\n\n`);
     res.write("data: [DONE]\n\n");
@@ -1110,20 +1132,17 @@ app.post("/api/fashion", requireAuth, aiLimiter, async (req, res) => {
     const prendasSueltas = datos.prendas.filter((p) => p.tipo === "prenda");
     const outfitsGuardados = datos.prendas.filter((p) => p.tipo === "outfit");
 
+    const opciones = prepararOpciones({ datos, prendasSueltas, outfitsGuardados, peticion });
     const ai = await openai.chat.completions.create({
       model: MODEL,
-      messages: mensajesFashion({ datos, prendasSueltas, outfitsGuardados, peticion }),
+      messages: mensajesFashion({ datos, prendasSueltas, outfitsGuardados, peticion, opciones }),
       max_tokens: 900,
       temperature: 0.7,
     });
 
     const parsed = safeParseJSON(ai?.choices?.[0]?.message?.content);
-    const resultado = resolverOutfit(parsed, prendasSueltas, outfitsGuardados);
+    const { resultado, respuesta } = cerrarRespuesta(parsed, opciones, prendasSueltas, outfitsGuardados);
     if (resultado.cambiar_panel) registrarRachaHoy(usuario_id);
-
-    const respuesta = !parsed
-      ? "Te armé una combinación con lo que tienes disponible. ¡Pruébala y dime qué piensas!"
-      : parsed.respuesta || "Aquí tienes un outfit que combina muy bien.";
     res.json({ respuesta, ...resultado });
   } catch (err) {
     console.error("🔥 fashion:", err.message);
@@ -1587,10 +1606,23 @@ app.post("/api/calendario", requireAuth, async (req, res) => {
     const { fecha, imagen_url, descripcion, metadata } = req.body;
     if (!fecha) return res.status(400).json({ error: "Falta fecha" });
 
+    // La regla de color la recalcula el backend con las prendas del usuario (no se confía en el cliente)
+    const ids = Array.isArray(metadata?.outfit_ids)
+      ? metadata.outfit_ids.slice(0, 30).map(String).filter((s) => s.length <= 64)
+      : [];
+    let prendasDia = [];
+    if (ids.length) {
+      const { data: ps, error: errPs } = await supabase
+        .from("prendas").select("id, tipo, descripcion, metadata_ia")
+        .in("id", ids).eq("usuario_id", req.userId);
+      if (errPs) console.error("calendario regla:", errPs.message);
+      prendasDia = ps || [];
+    }
+
     const { data, error } = await supabase
       .from("calendar_outfits")
       .upsert(
-        { usuario_id: req.userId, fecha, imagen_url, descripcion, metadata: metadata || {} },
+        { usuario_id: req.userId, fecha, imagen_url, descripcion, metadata: metadataCalendario(metadata, prendasDia) },
         { onConflict: "usuario_id,fecha" }
       )
       .select().single();
