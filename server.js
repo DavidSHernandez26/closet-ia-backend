@@ -16,6 +16,9 @@ import { fechaHoy, restarDias, calcularRacha } from "./lib/fechas.js";
 import { limpiarHistorial, limpiarClima, limpiarIdsAnteriores, construirMensajeUsuario, resolverOutfit } from "./lib/fashion.js";
 import { esUuid } from "./lib/validar.js";
 import { rutaDesdeUrlPublica } from "./lib/storage.js";
+import { colorMedible, faltaColorMedible } from "./lib/color.js";
+import { colorDominante } from "./lib/colorImagen.js";
+import { fusionarPrendasOutfit } from "./lib/prendasOutfit.js";
 import { FASHION_SYSTEM_PROMPT } from "./prompts/fashion.js";
 
 dotenv.config();
@@ -577,9 +580,11 @@ Devuelve SOLO este JSON (sin texto extra):
   "temporada": "todo el año",
   "estilo": "casual",
   "patron": "liso",
-  "fit": "regular"
+  "fit": "regular",
+  "color_hex": "#8B5A2B"
 }
 Reglas para cada campo:
+- color_hex: hex #RRGGBB del color principal de la prenda.
 - color: muy específico (café, marrón, beige, crema, burdeos, mostaza, camel, terracota, verde oliva, azul marino). Principal si hay varios: "negro con blanco".
 - nombre: término correcto (tenis, botines, mocasines, chaqueta, sudadera, hoodie, polo, blusa, etc).
 - tipo: SOLO uno de: calzado, parte superior, parte inferior, accesorio, abrigo, vestido.
@@ -607,6 +612,12 @@ Reglas para cada campo:
         return res.status(422).json({ error: "La imagen no parece contener una prenda de ropa, calzado o accesorio." });
       }
 
+      const hexDominante = sinFondo ? await colorDominante(sinFondo).catch(() => null) : null;
+      const colorMed = colorMedible(hexDominante || parsed?.color_hex);
+      const metadataPrenda = { ...(parsed || {}) };
+      delete metadataPrenda.color_hex;
+      if (colorMed) metadataPrenda.color_medible = colorMed;
+
       const nombre = parsed?.nombre || "prenda";
       const color = parsed?.color || "?";
       const tipoPrenda = parsed?.tipo || "?";
@@ -615,7 +626,7 @@ Reglas para cada campo:
       await supabase.from("prendas").insert([{
         usuario_id, tipo: "prenda", genero,
         imagen_url: imagenOriginalUrl,
-        descripcion, metadata_ia: parsed || {},
+        descripcion, metadata_ia: metadataPrenda,
       }]);
       invalidatePrendasCache(usuario_id);
 
@@ -646,12 +657,12 @@ Reglas para cada campo:
 Analiza este outfit y devuelve SOLO este JSON:
 {
   "prendas": [
-    { "nombre": "camiseta", "color": "blanco", "tipo": "parte superior" },
-    { "nombre": "pantalón cargo", "color": "verde oliva", "tipo": "parte inferior" }
+    { "nombre": "camiseta", "color": "blanco", "tipo": "parte superior", "color_hex": "#F5F5F5" },
+    { "nombre": "pantalón cargo", "color": "verde oliva", "tipo": "parte inferior", "color_hex": "#6B6B3A" }
   ],
   "descripcion_outfit": "Outfit casual con camiseta blanca y pantalón cargo verde oliva"
 }
-Reglas: colores específicos, nombres correctos, tipos: calzado/parte superior/parte inferior/accesorio/abrigo. Incluye TODAS las prendas visibles.`,
+Reglas: colores específicos, nombres correctos, tipos: calzado/parte superior/parte inferior/accesorio/abrigo. Incluye TODAS las prendas visibles. color_hex: hex #RRGGBB del color de cada prenda.`,
             },
             { type: "image_url", image_url: { url: imagenOriginalUrl, detail: "low" } },
           ],
@@ -661,7 +672,10 @@ Reglas: colores específicos, nombres correctos, tipos: calzado/parte superior/p
       });
 
       const parsed = safeParseJSON(ai?.choices?.[0]?.message?.content);
-      const prendasDetectadas = parsed?.prendas || [];
+      const prendasDetectadas = (Array.isArray(parsed?.prendas) ? parsed.prendas : []).map(({ color_hex, ...p }) => {
+        const cm = colorMedible(color_hex);
+        return cm ? { ...p, color_medible: cm } : p;
+      });
       const descripcionOutfit = parsed?.descripcion_outfit || "Outfit completo";
 
       await supabase.from("prendas").insert([{
@@ -739,48 +753,118 @@ app.delete("/api/prendas/:id", requireAuth, async (req, res) => {
   }
 });
 
+/* Descarga una imagen de nuestro Storage (timeout 15 s). Devuelve Buffer o null. */
+async function descargarImagen(url) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 15000);
+  try {
+    const r = await fetch(url, { signal: ctrl.signal });
+    if (!r.ok) return null;
+    return Buffer.from(await r.arrayBuffer());
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+async function contarPendientesColor(usuario_id) {
+  const { data, error } = await supabase
+    .from("prendas").select("id, tipo, metadata_ia").eq("usuario_id", usuario_id).limit(500);
+  if (error) throw error;
+  return (data || []).filter(faltaColorMedible).length;
+}
+
+app.get("/api/prendas/pendientes-color", requireAuth, async (req, res) => {
+  try {
+    res.json({ pendientes: await contarPendientesColor(req.userId) });
+  } catch (err) {
+    fallar(res, "pendientes-color", err);
+  }
+});
+
 /* ─────────────────────────────────────
    🔄 RE-ANÁLISIS DE PRENDAS EXISTENTES
-   Enriquece metadata_ia con material, temporada, estilo, patrón, fit
+   Enriquece metadata_ia (material, temporada, estilo, patrón, fit) y
+   guarda el color medible de prendas y outfits.
 ───────────────────────────────────── */
 app.post("/api/prendas/reanalizar", requireAuth, aiLimiter, async (req, res) => {
   try {
     const usuario_id = req.userId;
-    const { data: prendas, error } = await supabase
+    const { data: items, error } = await supabase
       .from("prendas")
-      .select("id, imagen_url, descripcion, metadata_ia")
+      .select("id, tipo, imagen_url, descripcion, metadata_ia")
       .eq("usuario_id", usuario_id)
-      .eq("tipo", "prenda")
+      .in("tipo", ["prenda", "outfit"])
       .limit(500);
 
     if (error) throw error;
-    if (!prendas || prendas.length === 0)
-      return res.json({ mensaje: "No hay prendas para analizar.", actualizadas: 0 });
+    if (!items || items.length === 0)
+      return res.json({ mensaje: "No hay prendas para analizar.", actualizadas: 0, total: 0, pendientes: 0 });
 
-    // Solo prendas que no tienen los campos nuevos
-    const pendientes = prendas.filter(p => {
+    const faltaEnriquecer = (p) => {
       const m = p.metadata_ia || {};
-      return !m.material || !m.temporada || !m.estilo || !m.patron || !m.fit;
-    });
+      return p.tipo === "prenda" && (!m.material || !m.temporada || !m.estilo || !m.patron || !m.fit);
+    };
+    const pendientes = items.filter(p => faltaEnriquecer(p) || faltaColorMedible(p));
 
     if (pendientes.length === 0)
-      return res.json({ mensaje: "Todas las prendas ya tienen metadata completa.", actualizadas: 0 });
+      return res.json({ mensaje: "Todas las prendas ya tienen metadata completa.", actualizadas: 0, total: 0, pendientes: 0 });
 
     let actualizadas = 0;
     const LOTE = 5; // de a 5 para no saturar la API
 
-    for (let i = 0; i < pendientes.length; i += LOTE) {
-      const lote = pendientes.slice(i, i + LOTE);
-      await Promise.allSettled(lote.map(async (prenda) => {
-        try {
-          const ai = await openai.chat.completions.create({
-            model: MODEL,
-            messages: [{
-              role: "user",
-              content: [
-                {
-                  type: "text",
-                  text: `Analiza esta prenda y devuelve SOLO este JSON:
+    const reanalizarOutfit = async (outfit) => {
+      const ai = await openai.chat.completions.create({
+        model: MODEL,
+        messages: [{
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: `Analiza este outfit y devuelve SOLO este JSON:
+{
+  "prendas": [
+    { "nombre": "camiseta", "color": "blanco", "tipo": "parte superior", "color_hex": "#F5F5F5" }
+  ]
+}
+Reglas: colores específicos, nombres correctos, tipos: calzado/parte superior/parte inferior/accesorio/abrigo. Incluye TODAS las prendas visibles. color_hex: hex #RRGGBB del color de cada prenda.`,
+            },
+            { type: "image_url", image_url: { url: outfit.imagen_url, detail: "low" } },
+          ],
+        }],
+        temperature: 0,
+        max_tokens: 800,
+      });
+      const parsed = safeParseJSON(ai?.choices?.[0]?.message?.content);
+      const lista = fusionarPrendasOutfit(outfit.metadata_ia?.prendas, parsed?.prendas);
+      if (!lista) return;
+      await supabase.from("prendas").update({
+        metadata_ia: { ...(outfit.metadata_ia || {}), prendas: lista },
+      }).eq("id", outfit.id);
+      actualizadas++;
+    };
+
+    const reanalizarPrenda = async (prenda) => {
+      const needEnriquecer = faltaEnriquecer(prenda);
+      const needColor = faltaColorMedible(prenda);
+
+      let hex = null;
+      if (needColor && prenda.imagen_url) {
+        const buf = await descargarImagen(prenda.imagen_url);
+        if (buf) hex = await colorDominante(buf).catch(() => null);
+      }
+
+      let parsed = null;
+      if (needEnriquecer || (needColor && !hex)) {
+        const ai = await openai.chat.completions.create({
+          model: MODEL,
+          messages: [{
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: `Analiza esta prenda y devuelve SOLO este JSON:
 {
   "nombre": "...",
   "color": "...",
@@ -789,7 +873,8 @@ app.post("/api/prendas/reanalizar", requireAuth, aiLimiter, async (req, res) => 
   "temporada": "...",
   "estilo": "...",
   "patron": "...",
-  "fit": "..."
+  "fit": "...",
+  "color_hex": "#RRGGBB"
 }
 tipo: calzado | parte superior | parte inferior | accesorio | abrigo | vestido
   abrigo = chaquetas/sudaderas/hoodies/blazers
@@ -799,48 +884,66 @@ material: algodón, denim, cuero, lana, lino, poliéster, punto, sintético, sed
 temporada: verano | invierno | primavera/otoño | todo el año
 estilo: casual | formal | deportivo | streetwear | elegante | bohemio | minimalista
 patron: liso | rayas | cuadros | floral | estampado | camuflaje | animal print
-fit: slim | regular | oversized | ajustado | holgado`,
-                },
-                { type: "image_url", image_url: { url: prenda.imagen_url, detail: "low" } },
-              ],
-            }],
-            temperature: 0,
-            max_tokens: 300,
-          });
+fit: slim | regular | oversized | ajustado | holgado
+color_hex: hex #RRGGBB del color principal de la prenda`,
+              },
+              { type: "image_url", image_url: { url: prenda.imagen_url, detail: "low" } },
+            ],
+          }],
+          temperature: 0,
+          max_tokens: 300,
+        });
+        parsed = safeParseJSON(ai?.choices?.[0]?.message?.content);
+        if (!parsed) return;
+      }
 
-          const parsed = safeParseJSON(ai?.choices?.[0]?.message?.content);
-          if (!parsed) return;
+      const metaActual = prenda.metadata_ia || {};
+      const metaNueva = { ...metaActual };
+      let descripcion;
+      if (parsed) {
+        Object.assign(metaNueva, {
+          nombre:    parsed.nombre    || metaActual.nombre    || "",
+          color:     parsed.color     || metaActual.color     || "",
+          tipo:      parsed.tipo      || metaActual.tipo      || "",
+          material:  parsed.material  || metaActual.material  || "",
+          temporada: parsed.temporada || metaActual.temporada || "",
+          estilo:    parsed.estilo    || metaActual.estilo    || "",
+          patron:    parsed.patron    || metaActual.patron    || "",
+          fit:       parsed.fit       || metaActual.fit       || "",
+        });
+        delete metaNueva.color_hex;
+        const nombre = metaNueva.nombre || prenda.descripcion.split(" (")[0];
+        const color  = metaNueva.color  || prenda.descripcion.match(/\(([^)]+)\)/)?.[1] || "?";
+        const tipo   = metaNueva.tipo   || prenda.descripcion.split(" - ").pop() || "?";
+        descripcion = `${nombre} (${color}) - ${tipo}`;
+      }
 
-          const metaActual = prenda.metadata_ia || {};
-          const metaNueva = {
-            nombre:    parsed.nombre    || metaActual.nombre    || "",
-            color:     parsed.color     || metaActual.color     || "",
-            tipo:      parsed.tipo      || metaActual.tipo      || "",
-            material:  parsed.material  || metaActual.material  || "",
-            temporada: parsed.temporada || metaActual.temporada || "",
-            estilo:    parsed.estilo    || metaActual.estilo    || "",
-            patron:    parsed.patron    || metaActual.patron    || "",
-            fit:       parsed.fit       || metaActual.fit       || "",
-          };
+      if (needColor) {
+        const cm = colorMedible(hex || parsed?.color_hex);
+        if (cm) metaNueva.color_medible = cm;
+      }
 
-          const nombre = metaNueva.nombre || prenda.descripcion.split(" (")[0];
-          const color  = metaNueva.color  || prenda.descripcion.match(/\(([^)]+)\)/)?.[1] || "?";
-          const tipo   = metaNueva.tipo   || prenda.descripcion.split(" - ").pop() || "?";
+      const cambios = { metadata_ia: metaNueva };
+      if (descripcion) cambios.descripcion = descripcion;
+      await supabase.from("prendas").update(cambios).eq("id", prenda.id);
+      actualizadas++;
+    };
 
-          await supabase.from("prendas").update({
-            metadata_ia: metaNueva,
-            descripcion: `${nombre} (${color}) - ${tipo}`,
-          }).eq("id", prenda.id);
-
-          actualizadas++;
+    for (let i = 0; i < pendientes.length; i += LOTE) {
+      const lote = pendientes.slice(i, i + LOTE);
+      await Promise.allSettled(lote.map(async (item) => {
+        try {
+          if (item.tipo === "outfit") await reanalizarOutfit(item);
+          else await reanalizarPrenda(item);
         } catch (e) {
-          console.error(`🔥 reanalizar prenda ${prenda.id}:`, e.message);
+          console.error(`🔥 reanalizar ${item.tipo} ${item.id}:`, e.message);
         }
       }));
     }
 
     invalidatePrendasCache(usuario_id);
-    res.json({ mensaje: `✅ ${actualizadas} de ${pendientes.length} prendas actualizadas.`, actualizadas, total: pendientes.length });
+    const restantes = await contarPendientesColor(usuario_id);
+    res.json({ mensaje: `✅ ${actualizadas} de ${pendientes.length} prendas actualizadas.`, actualizadas, total: pendientes.length, pendientes: restantes });
   } catch (err) {
     fallar(res, "reanalizar", err);
   }
