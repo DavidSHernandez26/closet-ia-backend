@@ -11,6 +11,7 @@ import { createClient } from "@supabase/supabase-js";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { normalizarTipo, subtipoAccesorio, deduplicarPorTipo, safeParseJSON } from "./lib/outfit.js";
+import { fechaHoy, restarDias, calcularRacha } from "./lib/fechas.js";
 
 dotenv.config();
 
@@ -942,8 +943,7 @@ function formatPrendaRica(p) {
 
 async function registrarRachaHoy(usuario_id) {
   try {
-    const hoy = new Date().toISOString().split("T")[0];
-    await supabase.from("calendario").insert({ usuario_id, fecha: hoy });
+    await supabase.from("calendario").insert({ usuario_id, fecha: fechaHoy() });
   } catch { /* duplicado o error — la racha deduplica por Set */ }
 }
 
@@ -968,7 +968,7 @@ app.post("/api/fashion/stream", requireAuth, aiLimiter, async (req, res) => {
       supabase.from("calendario")
         .select("fecha, descripcion, metadata")
         .eq("usuario_id", usuario_id)
-        .gte("fecha", (() => { const d = new Date(); d.setDate(d.getDate() - 14); return d.toISOString().split("T")[0]; })())
+        .gte("fecha", restarDias(fechaHoy(), 14))
         .order("fecha", { ascending: false })
         .limit(10),
     ]);
@@ -1253,7 +1253,7 @@ app.post("/api/fashion", requireAuth, aiLimiter, async (req, res) => {
       supabase.from("calendario")
         .select("fecha, descripcion, metadata")
         .eq("usuario_id", usuario_id)
-        .gte("fecha", (() => { const d = new Date(); d.setDate(d.getDate() - 14); return d.toISOString().split("T")[0]; })())
+        .gte("fecha", restarDias(fechaHoy(), 14))
         .order("fecha", { ascending: false })
         .limit(10),
     ]);
@@ -2051,37 +2051,7 @@ app.get("/api/racha", requireAuth, async (req, res) => {
       return res.json({ racha: 0, ultimaFecha: null, registroHoy: false });
     }
 
-    // Normalizar a YYYY-MM-DD y deduplicar
-    const fechas = [...new Set(
-      (data || []).map(e => (e.fecha || "").slice(0, 10)).filter(Boolean)
-    )].sort().reverse();
-
-    if (!fechas.length) return res.json({ racha: 0, ultimaFecha: null });
-
-    const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
-    const ayer = new Date(hoy); ayer.setDate(ayer.getDate() - 1);
-    const ultima = new Date(fechas[0] + "T12:00:00"); ultima.setHours(0, 0, 0, 0);
-
-    // Si el último registro es más antiguo que ayer, la racha se rompió
-    if (ultima < ayer) return res.json({ racha: 0, ultimaFecha: fechas[0] });
-
-    let racha = 1;
-    let esperada = new Date(ultima); esperada.setDate(esperada.getDate() - 1);
-
-    for (let i = 1; i < fechas.length; i++) {
-      const f = new Date(fechas[i] + "T12:00:00"); f.setHours(0, 0, 0, 0);
-      if (f.getTime() === esperada.getTime()) {
-        racha++;
-        esperada.setDate(esperada.getDate() - 1);
-      } else if (f < esperada) {
-        break;
-      }
-    }
-
-    // ¿Ya registró outfit hoy?
-    const registroHoy = fechas[0] === hoy.toISOString().split("T")[0];
-
-    res.json({ racha, ultimaFecha: fechas[0], registroHoy });
+    res.json(calcularRacha((data || []).map(e => e.fecha), fechaHoy()));
   } catch (err) {
     console.error("🔥 racha:", err.message);
     res.status(500).json({ error: err.message });
