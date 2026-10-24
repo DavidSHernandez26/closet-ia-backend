@@ -79,6 +79,13 @@ const supabase = createClient(
 
 const MODEL = "gpt-4o-mini";
 
+async function borrarImagenStorage(url) {
+  const ruta = rutaDesdeUrlPublica(url);
+  if (!ruta) return;
+  const { error } = await supabase.storage.from("prendas").remove([ruta]);
+  if (error) console.error("⚠️ borrar imagen storage:", error.message);
+}
+
 function fallar(res, etiqueta, err, status = 500) {
   console.error(`🔥 ${etiqueta}:`, err.message);
   res.status(status).json({ error: "Error interno" });
@@ -714,11 +721,16 @@ app.delete("/api/prendas/:id", requireAuth, async (req, res) => {
     if (prenda.usuario_id !== req.userId) return res.status(403).json({ error: "Sin permiso" });
     const { error } = await supabase.from("prendas").delete().eq("id", id);
     if (error) throw error;
-    const ruta = rutaDesdeUrlPublica(prenda.imagen_url);
-    if (ruta) {
-      const { error: errImg } = await supabase.storage.from("prendas").remove([ruta]);
-      if (errImg) console.error("⚠️ borrar imagen storage:", errImg.message);
-    }
+    // El calendario copia la URL de la prenda: no borrar si aún se usa allí.
+    const [rA, rB] = await Promise.all([
+      supabase.from("calendar_outfits").select("id", { count: "exact", head: true })
+        .eq("usuario_id", req.userId).eq("imagen_url", prenda.imagen_url),
+      supabase.from("calendar_outfits").select("id", { count: "exact", head: true })
+        .eq("usuario_id", req.userId)
+        .contains("metadata", { outfit: [{ imagen_url: prenda.imagen_url }] }),
+    ]);
+    const enUso = rA.error || rB.error || rA.count > 0 || rB.count > 0;
+    if (!enUso) await borrarImagenStorage(prenda.imagen_url);
     invalidatePrendasCache(req.userId);
     res.json({ mensaje: "🗑️ Eliminado" });
   } catch (err) {
@@ -1193,11 +1205,7 @@ app.delete("/api/posts/:id", requireAuth, async (req, res) => {
     if (post.usuario_id !== req.userId) return res.status(403).json({ error: "Sin permiso" });
     const { error } = await supabase.from("posts").delete().eq("id", id);
     if (error) throw error;
-    const ruta = rutaDesdeUrlPublica(post.imagen_url);
-    if (ruta) {
-      const { error: errImg } = await supabase.storage.from("prendas").remove([ruta]);
-      if (errImg) console.error("⚠️ borrar imagen storage:", errImg.message);
-    }
+    await borrarImagenStorage(post.imagen_url);
     res.json({ mensaje: "🗑️ Post eliminado" });
   } catch (err) {
     fallar(res, "delete post", err);
