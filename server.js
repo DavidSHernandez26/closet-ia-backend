@@ -207,7 +207,7 @@ async function descargarImagen(url) {
 }
 
 /* ─────────────────────────────────────
-   🧼 REMOVE BACKGROUND (via Hugging Face Space)
+   🧼 REMOVE BACKGROUND (servicio rembg en Railway)
    model: "birefnet-general" para prenda individual (alta calidad)
 ───────────────────────────────────── */
 async function removeBackground(imageBuffer, model = "birefnet-general") {
@@ -601,7 +601,7 @@ app.post("/api/subir-prenda", requireAuth, aiLimiter, upload.single("imagen"), a
     imagenOriginalBuffer = await sharp(imagenOriginalBuffer).rotate().toBuffer();
 
     if (tipo === "prenda") {
-      const sinFondo = await removeBackground(imagenOriginalBuffer, "isnet-general-use");
+      const sinFondo = await removeBackground(imagenOriginalBuffer, "birefnet-general");
       const bufferFinal = sinFondo || imagenOriginalBuffer;
       const tieneFondo = !sinFondo;
 
