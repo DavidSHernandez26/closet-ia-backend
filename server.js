@@ -14,6 +14,7 @@ import { crearExtractorRespuesta } from "./lib/streamRespuesta.js";
 import { normalizarTipo, subtipoAccesorio, safeParseJSON } from "./lib/outfit.js";
 import { fechaHoy, restarDias, calcularRacha } from "./lib/fechas.js";
 import { limpiarHistorial, construirMensajeUsuario, resolverOutfit } from "./lib/fashion.js";
+import { esUuid } from "./lib/validar.js";
 import { FASHION_SYSTEM_PROMPT } from "./prompts/fashion.js";
 
 dotenv.config();
@@ -189,21 +190,6 @@ function setCachedPrendas(uid, data) {
 
 function invalidatePrendasCache(uid) {
   _prendasCache.delete(uid);
-}
-
-/* ─────────────────────────────────────
-   📥 DESCARGAR IMAGEN
-───────────────────────────────────── */
-async function descargarImagen(url) {
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
-    if (!res.ok) throw new Error(`Status ${res.status}`);
-    const buffer = Buffer.from(await res.arrayBuffer());
-    return buffer;
-  } catch (err) {
-    console.error("⚠️ Error descargando imagen:", err.message);
-    return null;
-  }
 }
 
 /* ─────────────────────────────────────
@@ -420,6 +406,7 @@ app.post("/api/amistad/solicitar", requireAuth, async (req, res) => {
     const requester_id = req.userId;
     const { addressee_id } = req.body;
     if (!addressee_id) return res.status(400).json({ error: "Faltan datos" });
+    if (!esUuid(addressee_id)) return res.status(400).json({ error: "ID inválido" });
     if (requester_id === addressee_id) return res.status(400).json({ error: "No puedes agregarte a ti mismo" });
 
     const { data: existing } = await supabase
@@ -459,6 +446,7 @@ app.put("/api/amistad/responder", requireAuth, async (req, res) => {
     const usuario_id = req.userId;
     const { friendship_id, status } = req.body;
     if (!friendship_id || !status) return res.status(400).json({ error: "Faltan datos" });
+    if (status !== "accepted" && status !== "rejected") return res.status(400).json({ error: "Estado inválido" });
 
     const { data, error } = await supabase
       .from("friendships")
@@ -504,6 +492,7 @@ app.get("/api/amistad/amigos", requireAuth, async (req, res) => {
   try {
     // uid param permite ver amigos de otro usuario (para stats de perfil)
     // Sin uid → devuelve los amigos del usuario autenticado
+    if (req.query.uid !== undefined && !esUuid(req.query.uid)) return res.status(400).json({ error: "ID inválido" });
     const usuario_id = req.query.uid || req.userId;
     const { data, error } = await supabase
       .from("friendships")
@@ -528,6 +517,7 @@ app.get("/api/amistad/estado", requireAuth, async (req, res) => {
     const { otro_id } = req.query;
     const usuario_id = req.userId;
     if (!otro_id) return res.status(400).json({ error: "Falta otro_id" });
+    if (!esUuid(otro_id)) return res.status(400).json({ error: "ID inválido" });
     const { data } = await supabase
       .from("friendships")
       .select("id, status, requester_id, addressee_id")
@@ -559,6 +549,7 @@ app.delete("/api/amistad/:id", requireAuth, async (req, res) => {
 app.get("/api/prendas/amigo/:amigo_id", requireAuth, async (req, res) => {
   try {
     const { amigo_id } = req.params;
+    if (!esUuid(amigo_id)) return res.status(400).json({ error: "ID inválido" });
     const usuario_id = req.userId;
     const { tipo } = req.query;
 
@@ -585,18 +576,11 @@ app.get("/api/prendas/amigo/:amigo_id", requireAuth, async (req, res) => {
 app.post("/api/subir-prenda", requireAuth, aiLimiter, upload.single("imagen"), async (req, res) => {
   try {
     const usuario_id = req.userId;
-    const { genero = "unisex", tipo = "prenda", imagen_url } = req.body;
-    if (!req.file && !imagen_url) return res.status(400).json({ error: "No se envió imagen" });
+    const { genero = "unisex", tipo = "prenda" } = req.body;
+    if (!req.file) return res.status(400).json({ error: "No se envió imagen" });
 
-    let imagenOriginalUrl = imagen_url;
-    let imagenOriginalBuffer = null;
-
-    if (req.file) {
-      imagenOriginalBuffer = await fs.promises.readFile(req.file.path);
-    } else {
-      imagenOriginalBuffer = await descargarImagen(imagenOriginalUrl);
-      if (!imagenOriginalBuffer) throw new Error("No se pudo descargar la imagen");
-    }
+    let imagenOriginalUrl;
+    let imagenOriginalBuffer = await fs.promises.readFile(req.file.path);
 
     imagenOriginalBuffer = await sharp(imagenOriginalBuffer).rotate().toBuffer();
 
@@ -1080,7 +1064,7 @@ app.post("/api/fashion", requireAuth, aiLimiter, async (req, res) => {
 /* ─────────────────────────────────────
    📊 ESTADÍSTICAS — recomendaciones de compra con IA
 ───────────────────────────────────────── */
-app.post("/api/recomendaciones-compra", requireAuth, async (req, res) => {
+app.post("/api/recomendaciones-compra", requireAuth, aiLimiter, async (req, res) => {
   try {
     const usuario_id = req.userId;
 
