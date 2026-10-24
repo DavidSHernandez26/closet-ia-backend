@@ -10,6 +10,7 @@ import sharp from "sharp";
 import { createClient } from "@supabase/supabase-js";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
+import { crearExtractorRespuesta } from "./lib/streamRespuesta.js";
 import { normalizarTipo, subtipoAccesorio, deduplicarPorTipo, safeParseJSON } from "./lib/outfit.js";
 import { fechaHoy, restarDias, calcularRacha } from "./lib/fechas.js";
 
@@ -1117,12 +1118,9 @@ Tono: cercano, seguro, como un amigo con buen gusto. Responde siempre en españo
       stream: true,
     });
 
-    /* ── State machine: extrae "respuesta" mientras acumula el JSON completo ── */
-    const MARKER = '"respuesta":"';
-    let state = "BEFORE_TEXT"; // BEFORE_TEXT | IN_TEXT | AFTER_TEXT
-    let markerBuf = "";
+    /* ── Extrae "respuesta" mientras acumula el JSON completo ── */
+    const extractor = crearExtractorRespuesta();
     let fullAccumulated = "";
-    let pendingBackslash = false; // fix: escape split entre dos chunks
 
     for await (const chunk of stream) {
       if (clientGone) break;
@@ -1130,62 +1128,7 @@ Tono: cercano, seguro, como un amigo con buen gusto. Responde siempre en españo
       if (!rawPiece) continue;
       fullAccumulated += rawPiece;
 
-      if (state === "AFTER_TEXT") continue;
-
-      let toProcess = rawPiece;
-
-      if (state === "BEFORE_TEXT") {
-        markerBuf += rawPiece;
-        const idx = markerBuf.indexOf(MARKER);
-        if (idx === -1) {
-          if (markerBuf.length > MARKER.length) markerBuf = markerBuf.slice(-MARKER.length);
-          continue;
-        }
-        toProcess = markerBuf.slice(idx + MARKER.length);
-        markerBuf = "";
-        state = "IN_TEXT";
-      }
-
-      // Extrae texto del campo respuesta, respetando escapes JSON
-      let text = "";
-      let i = 0;
-
-      // Si el chunk anterior terminó en \ suelto, procesarlo con el primer char de este chunk
-      if (pendingBackslash) {
-        pendingBackslash = false;
-        const esc = toProcess[0] ?? "";
-        if (esc === "n")  { text += "\n"; i = 1; }
-        else if (esc === '"') { text += '"'; i = 1; }
-        else if (esc === "t") { text += "\t"; i = 1; }
-        else if (esc === "\\") { text += "\\"; i = 1; }
-        else { text += "\\"; } // esc desconocido: emitir el backslash, no avanzar
-      }
-
-      while (i < toProcess.length) {
-        const ch = toProcess[i];
-        if (ch === "\\") {
-          if (i + 1 < toProcess.length) {
-            const esc = toProcess[i + 1];
-            if (esc === "n")  text += "\n";
-            else if (esc === '"')  text += '"';
-            else if (esc === "t")  text += "\t";
-            else if (esc === "\\") text += "\\";
-            else text += esc;
-            i += 2;
-          } else {
-            // Backslash al final del chunk — guardarlo para el siguiente
-            pendingBackslash = true;
-            break;
-          }
-        } else if (ch === '"') {
-          state = "AFTER_TEXT";
-          break;
-        } else {
-          text += ch;
-          i++;
-        }
-      }
-
+      const text = extractor.push(rawPiece);
       if (text && !clientGone) {
         res.write(`data: ${JSON.stringify({ type: "text", chunk: text })}\n\n`);
       }
