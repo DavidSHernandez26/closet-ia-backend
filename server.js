@@ -18,6 +18,7 @@ import { esUuid } from "./lib/validar.js";
 import { rutaDesdeUrlPublica } from "./lib/storage.js";
 import { colorMedible, faltaColorMedible } from "./lib/color.js";
 import { colorDominante } from "./lib/colorImagen.js";
+import { elegirTanda, LOTE_REANALISIS } from "./lib/tanda.js";
 import { fusionarPrendasOutfit } from "./lib/prendasOutfit.js";
 import { FASHION_SYSTEM_PROMPT } from "./prompts/fashion.js";
 
@@ -806,7 +807,8 @@ app.post("/api/prendas/reanalizar", requireAuth, aiLimiter, async (req, res) => 
       const m = p.metadata_ia || {};
       return p.tipo === "prenda" && (!m.material || !m.temporada || !m.estilo || !m.patron || !m.fit);
     };
-    const pendientes = items.filter(p => faltaEnriquecer(p) || faltaColorMedible(p));
+    const candidatas = items.filter(p => faltaEnriquecer(p) || faltaColorMedible(p));
+    const pendientes = elegirTanda(candidatas, faltaColorMedible, LOTE_REANALISIS);
 
     if (pendientes.length === 0)
       return res.json({ mensaje: "Todas las prendas ya tienen metadata completa.", actualizadas: 0, total: 0, pendientes: 0 });
