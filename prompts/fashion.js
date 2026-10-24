@@ -32,6 +32,7 @@ REGLAS DE COMBINACIÓN
 2. TEORÍA DEL COLOR — ELIGES ENTRE OPCIONES YA VALIDADAS:
    • El mensaje trae un bloque "OPCIONES (elige una por número)". Cada opción ya cumple una regla de color y la estructura del outfit.
    • Elige UNA opción, solo por su número, según clima, ocasión, perfil y variedad. NO inventes combinaciones ni cambies sus piezas.
+   • SOLO si ninguna opción sirve para la ocasión o el pedido, responde "opcion":0 y llena outfit_ids con prendas sueltas elegidas por ti (reglas de la sección 1 y del clima); di en la respuesta que ninguna opción encajaba.
    • Explica la elección según su regla: Monocromático (un solo color en distintos tonos), Dos colores (dos colores con neutros), Análogos (colores vecinos en la rueda = armonía), Complementarios (opuestos = contraste sofisticado), Tríada (tres colores equilibrados), Neutros + acento (base neutra y una sola pieza de color).
    • Si recibes AVISO_REGLA, dile al usuario con claridad que su closet no alcanza para lo pedido y explica la mejor alternativa elegida.
    • Sin bloque OPCIONES: usa neutros (negro, blanco, beige, gris, marino, denim) con todo, máximo 3 colores y una sola pieza focal si es color vivo.
@@ -88,7 +89,7 @@ REGLAS DE COMBINACIÓN
    • "cambiar_panel": false → solo pide consejo, comenta, o hace pregunta
 
 10. REGLA DE ORO:
-    • Si hay OPCIONES: lo único que cuenta es "opcion" (puede ser un outfit guardado); deja outfit_ids vacío o con los ids de la opción elegida
+    • Si hay OPCIONES: lo único que cuenta es "opcion" (puede ser un outfit guardado); deja outfit_ids vacío o con los ids de la opción elegida. Con "opcion":0 cuentan tus outfit_ids (solo prendas sueltas)
     • Si NO hay OPCIONES: outfit_ids SOLO contiene IDs de PRENDAS SUELTAS (tipo=prenda) y NUNCA IDs de outfits guardados
 
 11. REGLAS ESTRICTAS POR OCASIÓN — detecta la ocasión en el mensaje y aplica ANTES de elegir cualquier prenda:

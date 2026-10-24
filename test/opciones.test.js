@@ -5,6 +5,7 @@ import { cumpleRegla } from "../lib/reglas.js";
 import { normalizarTipo } from "../lib/outfit.js";
 import {
   reglasRecientes, prepararOpciones, textoPropuesta, puedeTransmitir, cerrarRespuesta, metadataCalendario, MAX_OPCIONES,
+  parsearStream,
 } from "../lib/opciones.js";
 
 let n = 0;
@@ -147,6 +148,7 @@ test("puedeTransmitir", () => {
   assert.equal(puedeTransmitir('{"opcion":3,"respuesta":"ho', cs), false);
   assert.equal(puedeTransmitir('{"respuesta":"ho', cs), false);
   assert.equal(puedeTransmitir('{"cambiar_panel":false,"respuesta":"ho', cs), true);
+  assert.equal(puedeTransmitir('{"opcion":0,"respuesta":"ho', cs), true);
 });
 
 test("cerrarRespuesta: pregunta pura usa el texto de la IA y no es error", () => {
@@ -204,4 +206,47 @@ test("metadataCalendario: recalcula la regla e ignora la del cliente", () => {
   assert.deepEqual(metadataCalendario(null, []), {});
   const conGuardado = metadataCalendario({ outfit_ids: ["500"] }, [guardado]);
   assert.equal(conGuardado.regla, "monocromatico");
+});
+
+const pzN = (nombre, tipo, hex) => ({ nombre, color: "x", tipo, color_medible: colorMedible(hex) });
+const verano = {
+  id: 600, tipo: "outfit", descripcion: "Outfit playa",
+  metadata_ia: { prendas: [pzN("camiseta blanca", "parte superior", "#FFFFFF"), pzN("shorts negros", "parte inferior", "#111111"), pzN("sandalias negras", "calzado", "#000000")] },
+};
+const conAbrigo = {
+  id: 601, tipo: "outfit", descripcion: "Outfit invierno",
+  metadata_ia: { prendas: [pzN("camiseta blanca", "parte superior", "#FFFFFF"), pzN("pantalón negro", "parte inferior", "#111111"), pzN("chaqueta negra", "abrigo", "#000000")] },
+};
+const sinAbrigo = {
+  id: 602, tipo: "outfit", descripcion: "Outfit básico",
+  metadata_ia: { prendas: [pzN("camiseta blanca", "parte superior", "#FFFFFF"), pzN("pantalón negro", "parte inferior", "#111111")] },
+};
+const idsGuardados = (r) => r.candidatos.filter((c) => c.prendas[0]?.tipo === "outfit").map((c) => c.ids[0]);
+
+test("outfits guardados respetan el clima: frío sin shorts/sandalias y con abrigo", () => {
+  const r = preparar("outfit para hoy", { guardados: [verano, conAbrigo, sinAbrigo], pet: { clima: { temp: 6, feels: 5 } } });
+  const ids = idsGuardados(r);
+  assert.ok(!ids.includes("600"));
+  assert.ok(!ids.includes("602"));
+  assert.ok(ids.includes("601"));
+});
+
+test("outfits guardados respetan el clima: calor sin abrigo", () => {
+  const r = preparar("outfit para hoy", { guardados: [conAbrigo, sinAbrigo], pet: { clima: { temp: 30, feels: 31 } } });
+  const ids = idsGuardados(r);
+  assert.ok(!ids.includes("601"));
+  assert.ok(ids.includes("602"));
+});
+
+test("parsearStream: JSON roto tras liberar por cambiar_panel false → pregunta", () => {
+  const cs = [{ ids: [id(supBlanco)], prendas: [supBlanco], regla: "dos_colores" }];
+  const acc = '{"cambiar_panel":false,"respuesta":"Un look análogo es';
+  const parsed = parsearStream(acc, true);
+  assert.equal(parsed.cambiar_panel, false);
+  const r = cerrarRespuesta(parsed, { candidatos: cs }, closet, []);
+  assert.equal(r.resultado.cambiar_panel, false);
+  assert.equal(r.propio, false);
+  assert.deepEqual(parsearStream('{"opcion":1,"respuesta":"x', true), { opcion: 1 });
+  assert.equal(parsearStream('{"opcion":1,"respuesta":"x', false), null);
+  assert.deepEqual(parsearStream('{"opcion":2,"respuesta":"x"}', false), { opcion: 2, respuesta: "x" });
 });

@@ -13,8 +13,8 @@ import rateLimit from "express-rate-limit";
 import { crearExtractorRespuesta } from "./lib/streamRespuesta.js";
 import { safeParseJSON } from "./lib/outfit.js";
 import { fechaHoy, restarDias, calcularRacha } from "./lib/fechas.js";
-import { limpiarHistorial, limpiarClima, limpiarIdsAnteriores, construirMensajeUsuario, leerOpcion } from "./lib/fashion.js";
-import { prepararOpciones, puedeTransmitir, cerrarRespuesta, metadataCalendario } from "./lib/opciones.js";
+import { limpiarHistorial, limpiarClima, limpiarIdsAnteriores, construirMensajeUsuario } from "./lib/fashion.js";
+import { prepararOpciones, puedeTransmitir, parsearStream, cerrarRespuesta, metadataCalendario } from "./lib/opciones.js";
 import { esUuid } from "./lib/validar.js";
 import { rutaDesdeUrlPublica } from "./lib/storage.js";
 import { colorMedible, faltaColorMedible } from "./lib/color.js";
@@ -1095,9 +1095,8 @@ app.post("/api/fashion/stream", requireAuth, aiLimiter, async (req, res) => {
 
     if (clientGone) return res.end();
 
-    // JSON roto tras transmitir una opción válida: se respeta la opción ya narrada.
-    const opcionLeida = leerOpcion(fullAccumulated);
-    const parsed = safeParseJSON(fullAccumulated) ?? (transmitir && opcionLeida ? { opcion: opcionLeida } : null);
+    // JSON roto tras transmitir: se respeta lo ya narrado (pregunta pura u opción leída).
+    const parsed = parsearStream(fullAccumulated, transmitir === true);
     const { resultado, respuesta } = cerrarRespuesta(parsed, opciones, prendasSueltas, outfitsGuardados);
     // Texto retenido (o la IA nunca escribió "respuesta" habiendo opciones): un solo chunk.
     if (transmitir === false || (transmitir === null && opciones.candidatos.length)) res.write(`data: ${JSON.stringify({ type: "text", chunk: respuesta })}\n\n`);

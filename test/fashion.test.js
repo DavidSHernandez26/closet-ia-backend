@@ -91,7 +91,7 @@ test("resolverEleccion: usa la opción elegida", () => {
   assert.deepEqual(r.sugerencias, [{ text: "a", action: "chat" }]);
 });
 test("resolverEleccion: opción inválida o ausente cae a la primera con valida false", () => {
-  for (const p of [{ opcion: 9 }, {}, { opcion: 0 }]) {
+  for (const p of [{ opcion: 9 }, {}, { opcion: -1 }]) {
     const r = resolverEleccion(p, [c1, c2], sueltas, []);
     assert.deepEqual(r.outfit.map(x => x.id), [12, 13]);
     assert.equal(r.valida, false);
@@ -129,4 +129,19 @@ test("construirMensajeUsuario: EXCLUSIÓN OBLIGATORIA solo sin candidatos", () =
   const prev = { ...base, outfitIdsAnteriores: ["12"] };
   assert.match(construirMensajeUsuario(prev), /EXCLUSIÓN OBLIGATORIA/);
   assert.doesNotMatch(construirMensajeUsuario({ ...prev, candidatos: [c1] }), /EXCLUSIÓN OBLIGATORIA/);
+});
+
+test("resolverEleccion: opcion 0 = ninguna sirve → prendas de outfit_ids con la regla detectada", async () => {
+  const { colorMedible } = await import("../lib/color.js");
+  const blanca = { id: 21, tipo: "prenda", descripcion: "camiseta blanca - parte superior", metadata_ia: { tipo: "parte superior", color_medible: colorMedible("#FFFFFF") } };
+  const negro = { id: 22, tipo: "prenda", descripcion: "pantalón negro - parte inferior", metadata_ia: { tipo: "parte inferior", color_medible: colorMedible("#111111") } };
+  const r = resolverEleccion({ opcion: 0, outfit_ids: [21, "22"], cambiar_panel: true }, [c1, c2], [...sueltas, blanca, negro], []);
+  assert.deepEqual(r.outfit.map((x) => x.id), [21, 22]);
+  assert.equal(r.valida, true);
+  assert.equal(r.regla, NOMBRE_REGLA.dos_colores);
+  assert.equal(r.cambiar_panel, true);
+  assert.equal(leerOpcion('{"opcion":0,"respuesta":"'), 0);
+});
+test("prompt: permite opcion 0 cuando ninguna opción sirve", () => {
+  assert.match(FASHION_SYSTEM_PROMPT, /"opcion":0/);
 });
