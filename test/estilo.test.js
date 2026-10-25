@@ -62,3 +62,15 @@ test("puntuarCandidato: prenda reciente resta", () => {
   assert.ok(Math.abs(sin - con - PENALIZACION_RECIENTE) < 1e-9);
   assert.equal(puntuarCandidato(c, null, []), 0);
 });
+
+test("estiloSinOutfit: un outfit guardado no se puntúa con su propio aporte", async () => {
+  const { contarEstilo, estiloSinOutfit } = await import("../lib/estilo.js");
+  const pz = (tipo, hex) => ({ nombre: "x", tipo, color_medible: colorMedible(hex) });
+  const o = { id: "o1", tipo: "outfit", metadata_ia: { prendas: [pz("parte superior", "#1E50C8"), pz("parte inferior", "#6A9AF0")] } };
+  const cuentas = contarEstilo({ calendario: [], prendasSueltas, outfitsGuardados: [o] });
+  assert.equal(cuentas.reglas.monocromatico, 1);
+  assert.deepEqual(estiloSinOutfit(cuentas, o), { reglas: {}, familias: {} });
+  const c = { ids: ["o1"], prendas: [o], regla: "monocromatico" };
+  assert.equal(puntuarCandidato(c, estiloSinOutfit(cuentas, o)), 0);
+  assert.ok(puntuarCandidato(c, aprenderEstilo({ outfitsGuardados: [o] })) > 0);
+});

@@ -5,8 +5,9 @@ import { cumpleRegla } from "../lib/reglas.js";
 import { normalizarTipo } from "../lib/outfit.js";
 import {
   reglasRecientes, prepararOpciones, textoPropuesta, puedeTransmitir, cerrarRespuesta, metadataCalendario, MAX_OPCIONES,
-  parsearStream,
+  parsearStream, MAX_GUARDADOS_EN_LISTA,
 } from "../lib/opciones.js";
+import { idsDeEntrada } from "../lib/estilo.js";
 
 let n = 0;
 const prenda = (nombre, tipo, hex) => ({
@@ -249,4 +250,75 @@ test("parsearStream: JSON roto tras liberar por cambiar_panel false → pregunta
   assert.deepEqual(parsearStream('{"opcion":1,"respuesta":"x', true), { opcion: 1 });
   assert.equal(parsearStream('{"opcion":1,"respuesta":"x', false), null);
   assert.deepEqual(parsearStream('{"opcion":2,"respuesta":"x"}', false), { opcion: 2, respuesta: "x" });
+});
+
+// ── Fix final: slots completos, guardados acotados, variedad por base, calendario ──
+const mk = (idp, nombre, tipo, hex) => ({
+  id: idp, tipo: "prenda", descripcion: `${nombre} (x) - ${tipo}`,
+  metadata_ia: { nombre, tipo, color: "x", temporada: "todo el año", color_medible: colorMedible(hex) },
+});
+const closetChico = [
+  mk("t1", "camiseta", "parte superior", "#FFFFFF"), mk("t2", "camisa", "parte superior", "#1E3A8A"),
+  mk("t3", "polo", "parte superior", "#C0392B"), mk("b1", "jean", "parte inferior", "#5B7DB1"),
+  mk("b2", "pantalón", "parte inferior", "#111111"), mk("s1", "tenis", "calzado", "#FFFFFF"),
+  mk("c1", "chaqueta", "abrigo", "#111111"), mk("a1", "reloj", "accesorio", "#808080"),
+];
+
+test("excluirIds no vacía slots: otro pedido sigue con calzado y abrigo, y cambia superior/inferior", () => {
+  const anteriores = ["t1", "b1", "s1", "c1", "a1"];
+  const { candidatos } = preparar("dame otro outfit", {
+    sueltas: closetChico, guardados: [], pet: { clima: { feels: 10 }, outfitIdsAnteriores: anteriores },
+  });
+  assert.ok(candidatos.length > 0);
+  for (const c of candidatos) {
+    assert.ok(c.ids.includes("s1"), `sin calzado: ${c.ids}`);
+    assert.ok(c.ids.includes("c1"), `sin abrigo: ${c.ids}`);
+    assert.ok(!c.ids.includes("t1") && !c.ids.includes("b1"), `repite base: ${c.ids}`);
+  }
+});
+
+test("lista corta: como mucho MAX_GUARDADOS_EN_LISTA outfits guardados", () => {
+  const guardados = Array.from({ length: 20 }, (_, i) => ({
+    id: 700 + i, tipo: "outfit", descripcion: `Outfit ${i}`,
+    metadata_ia: { prendas: [pz("parte superior", ["#FFFFFF", "#1E50C8", "#E02020"][i % 3]), pz("parte inferior", "#5B7FA6")] },
+  }));
+  const { candidatos } = preparar("outfit para hoy", { guardados });
+  assert.ok(MAX_GUARDADOS_EN_LISTA <= 2);
+  const n = candidatos.filter((c) => c.prendas[0]?.tipo === "outfit").length;
+  assert.ok(n <= MAX_GUARDADOS_EN_LISTA, `${n} guardados`);
+  assert.ok(candidatos.length > n, "también hay prendas sueltas");
+});
+
+test("lista corta: como mucho 2 opciones por base (superior + inferior o vestido)", () => {
+  const sueltas = [...closet, prenda("reloj gris", "accesorio", "#808080"), prenda("gorra negra", "accesorio", "#000000"),
+    prenda("botas negras", "calzado", "#000000")];
+  for (let k = 0; k < 5; k++) {
+    const { candidatos } = preparar("outfit para hoy", { sueltas, guardados: [] });
+    const cuenta = {};
+    for (const c of candidatos) {
+      const base = c.prendas.filter((p) => ["parte superior", "parte inferior", "vestido"].includes(tipoDe(p))).map(id).join("|");
+      cuenta[base] = (cuenta[base] || 0) + 1;
+    }
+    for (const [b, v] of Object.entries(cuenta)) assert.ok(v <= 2, `base ${b} aparece ${v} veces`);
+  }
+});
+
+test("metadataCalendario: ids desde metadata.outfit[].id y outfit_guardado_id", () => {
+  const pantCeleste = prenda("pantalón celeste", "parte inferior", "#6A9AF0");
+  const editado = metadataCalendario({ outfit: [{ id: supAzul.id }, { id: pantCeleste.id }, { imagen_url: "x" }] }, [supAzul, pantCeleste]);
+  assert.equal(editado.regla, "monocromatico");
+  assert.deepEqual(idsDeEntrada({ outfit: [{ id: 1 }, { id: "2" }, {}] }), ["1", "2"]);
+  assert.deepEqual(idsDeEntrada({ outfit_ids: [3], outfit: [{ id: 1 }] }), ["3"]);
+  assert.deepEqual(idsDeEntrada({ outfit_guardado_id: 500, prendas: [] }), ["500"]);
+  assert.deepEqual(idsDeEntrada(null), []);
+  const conGuardado = metadataCalendario({ outfit_guardado_id: 500, prendas: guardado.metadata_ia.prendas }, [guardado]);
+  assert.equal(conGuardado.regla, "monocromatico");
+  assert.equal(conGuardado.outfit_guardado_id, 500);
+});
+
+test("calendario con outfit guardado: penaliza el guardado reciente", () => {
+  const cal = [{ fecha: "2026-10-23", metadata: { outfit_guardado_id: 500 } }];
+  const { candidatos } = preparar("algo monocromático en azul", { dat: { calendarioReciente: cal } });
+  const g = candidatos.find((c) => c.ids[0] === "500");
+  assert.ok(g && g.puntaje < 0, `puntaje ${g?.puntaje}`);
 });

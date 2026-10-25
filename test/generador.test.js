@@ -162,7 +162,7 @@ test("closet grande: muestrea y responde rápido", () => {
     const tipo = ["parte superior", "parte inferior", "calzado", "accesorio", "abrigo"][i % 5];
     grande.push(prenda(`p${i} ${["reloj", "gorra", "collar", "bolso"][i % 4]}`, tipo, colores[i % colores.length]));
   }
-  assert.ok(MAX_COMBINACIONES === 20000);
+  assert.ok(MAX_COMBINACIONES === 3000);
   const t0 = Date.now();
   const cs = generarCandidatos({ prendas: grande, regla: null });
   assert.ok(cs.length > 0);
@@ -213,4 +213,18 @@ test("calor con lluvia: abrigo de lluvia opcional, otros no", () => {
   const cs = generarCandidatos({ prendas: [...closet, imper], regla: null, clima: { temp: 28, rain_prob: 60 }, max: 20 });
   assert.ok(cs.length > 0);
   for (const c of cs) assert.ok(!c.ids.includes(id(abrigoGris)));
+});
+
+test("excluirIds: calzado/accesorio excluidos se conservan con penalización si no hay otro", () => {
+  const chico = [supAzul, supBlanco, jean, pantNegro, zapNegro, accNegro];
+  const cs = generarCandidatos({ prendas: chico, regla: null, excluirIds: [supAzul.id, zapNegro.id, accNegro.id] });
+  assert.ok(cs.length > 0);
+  for (const c of cs) {
+    assert.ok(!c.ids.includes(id(supAzul)));
+    assert.ok(c.ids.includes(id(zapNegro)) && c.ids.includes(id(accNegro)));
+    assert.ok(c.puntaje <= -1);
+  }
+  // exclusionBlanda false (modo edición: "cambia solo los zapatos"): estricto en todo slot
+  const estricto = generarCandidatos({ prendas: chico, regla: null, excluirIds: [zapNegro.id], exclusionBlanda: false });
+  for (const c of estricto) assert.ok(!c.ids.includes(id(zapNegro)));
 });

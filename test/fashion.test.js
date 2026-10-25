@@ -145,3 +145,21 @@ test("resolverEleccion: opcion 0 = ninguna sirve → prendas de outfit_ids con l
 test("prompt: permite opcion 0 cuando ninguna opción sirve", () => {
   assert.match(FASHION_SYSTEM_PROMPT, /"opcion":0/);
 });
+test("construirMensajeUsuario: marca (sin accesorio) / (sin calzado) en las opciones", () => {
+  const zap = { id: 14, tipo: "prenda", descripcion: "tenis (negro) - calzado", metadata_ia: {} };
+  const acc = { id: 15, tipo: "prenda", descripcion: "reloj (gris) - accesorio", metadata_ia: {} };
+  const completo = { ids: ["12", "13", "14", "15"], prendas: [...sueltas, zap, acc], regla: "monocromatico" };
+  const sinNada = { ids: ["12", "13"], prendas: sueltas, regla: "monocromatico" };
+  const guardadoSinAcc = { ids: ["99"], regla: "dos_colores", prendas: [{ ...guardado, metadata_ia: { prendas: [{ nombre: "botas", tipo: "calzado" }] } }] };
+  const t = construirMensajeUsuario({ ...base, candidatos: [completo, sinNada, guardadoSinAcc] });
+  const lineas = t.split("\n").filter((l) => /^\d\) /.test(l));
+  assert.doesNotMatch(lineas[0], /sin accesorio|sin calzado/);
+  assert.match(lineas[1], /\(sin accesorio\)/);
+  assert.match(lineas[1], /\(sin calzado\)/);
+  assert.match(lineas[2], /\(sin accesorio\)/);
+  assert.doesNotMatch(lineas[2], /sin calzado/);
+});
+test("prompt: pide mencionar (sin accesorio) / (sin calzado)", () => {
+  assert.ok(FASHION_SYSTEM_PROMPT.includes("(sin accesorio)"));
+  assert.ok(FASHION_SYSTEM_PROMPT.includes("(sin calzado)"));
+});

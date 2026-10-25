@@ -15,6 +15,7 @@ import { safeParseJSON } from "./lib/outfit.js";
 import { fechaHoy, restarDias, calcularRacha } from "./lib/fechas.js";
 import { limpiarHistorial, limpiarClima, limpiarIdsAnteriores, construirMensajeUsuario } from "./lib/fashion.js";
 import { prepararOpciones, puedeTransmitir, parsearStream, cerrarRespuesta, metadataCalendario } from "./lib/opciones.js";
+import { idsDeEntrada } from "./lib/estilo.js";
 import { esUuid } from "./lib/validar.js";
 import { rutaDesdeUrlPublica } from "./lib/storage.js";
 import { colorMedible, faltaColorMedible } from "./lib/color.js";
@@ -1037,6 +1038,16 @@ function iniciarSSE(res) {
 /* ─────────────────────────────────────
    🌊 FASHION STREAMING — SSE typewriter
 ───────────────────────────────────────── */
+/* Si el generador de opciones falla, se sigue con el flujo tradicional (sin opciones), nunca un 500. */
+function prepararOpcionesSeguro(args) {
+  try {
+    return prepararOpciones(args);
+  } catch (err) {
+    console.error("prepararOpciones:", err?.message || err);
+    return { candidatos: [], avisoRegla: null };
+  }
+}
+
 app.post("/api/fashion/stream", requireAuth, aiLimiter, async (req, res) => {
   try {
     const usuario_id = req.userId;
@@ -1056,7 +1067,7 @@ app.post("/api/fashion/stream", requireAuth, aiLimiter, async (req, res) => {
     const prendasSueltas = datos.prendas.filter((p) => p.tipo === "prenda");
     const outfitsGuardados = datos.prendas.filter((p) => p.tipo === "outfit");
 
-    const opciones = prepararOpciones({ datos, prendasSueltas, outfitsGuardados, peticion });
+    const opciones = prepararOpcionesSeguro({ datos, prendasSueltas, outfitsGuardados, peticion });
 
     iniciarSSE(res);
 
@@ -1131,7 +1142,7 @@ app.post("/api/fashion", requireAuth, aiLimiter, async (req, res) => {
     const prendasSueltas = datos.prendas.filter((p) => p.tipo === "prenda");
     const outfitsGuardados = datos.prendas.filter((p) => p.tipo === "outfit");
 
-    const opciones = prepararOpciones({ datos, prendasSueltas, outfitsGuardados, peticion });
+    const opciones = prepararOpcionesSeguro({ datos, prendasSueltas, outfitsGuardados, peticion });
     const ai = await openai.chat.completions.create({
       model: MODEL,
       messages: mensajesFashion({ datos, prendasSueltas, outfitsGuardados, peticion, opciones }),
@@ -1606,9 +1617,8 @@ app.post("/api/calendario", requireAuth, async (req, res) => {
     if (!fecha) return res.status(400).json({ error: "Falta fecha" });
 
     // La regla de color la recalcula el backend con las prendas del usuario (no se confía en el cliente)
-    const ids = Array.isArray(metadata?.outfit_ids)
-      ? metadata.outfit_ids.slice(0, 30).map(String).filter((s) => s.length <= 64)
-      : [];
+    // outfit_ids, o los ids de metadata.outfit (outfit editado), o outfit_guardado_id
+    const ids = idsDeEntrada(metadata).slice(0, 30).filter((s) => s.length <= 64);
     let prendasDia = [];
     if (ids.length) {
       const { data: ps, error: errPs } = await supabase

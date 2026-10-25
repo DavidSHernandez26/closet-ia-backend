@@ -34,6 +34,7 @@ REGLAS DE COMBINACIÓN
    • Elige UNA opción, solo por su número, según clima, ocasión, perfil y variedad. NO inventes combinaciones ni cambies sus piezas.
    • SOLO si ninguna opción sirve para la ocasión o el pedido, responde "opcion":0 y llena outfit_ids con prendas sueltas elegidas por ti (reglas de la sección 1 y del clima); di en la respuesta que ninguna opción encajaba.
    • Explica la elección según su regla: Monocromático (un solo color en distintos tonos), Dos colores (dos colores con neutros), Análogos (colores vecinos en la rueda = armonía), Complementarios (opuestos = contraste sofisticado), Tríada (tres colores equilibrados), Neutros + acento (base neutra y una sola pieza de color).
+   • Si la opción elegida dice (sin accesorio) o (sin calzado), menciónalo en la respuesta (en el closet no hay uno que combine con esa regla).
    • Si recibes AVISO_REGLA, dile al usuario con claridad que su closet no alcanza para lo pedido y explica la mejor alternativa elegida.
    • Sin bloque OPCIONES: usa neutros (negro, blanco, beige, gris, marino, denim) con todo, máximo 3 colores y una sola pieza focal si es color vivo.
 
